@@ -63,6 +63,12 @@ type RawSensorItem = {
   "PM2.5 (µg/m³)": string | number;
 };
 
+type MortalitySummaryRow = {
+  date: string;
+  A: number;
+  B: number;
+  C: number;
+};
 // ========= Helpers =========
 
 const clamp = (v: number, lo: number, hi: number) =>
@@ -178,6 +184,7 @@ const PARAM_CONFIG = {
     color: "#a855f7",
   },
 } as const;
+
 
 const zoneLegendConfig = {
   A: { label: "Zone A", dot: "bg-red-500", text: "text-red-500" },
@@ -554,7 +561,27 @@ PM2.5 ≤ 35 µg/m³
       })),
     };
   }, [chartData]);
+const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
+  if (selectedZone !== "ALL") return [];
 
+  const map = new Map<string, MortalitySummaryRow>();
+
+  mortality.forEach((m) => {
+    if (!map.has(m.date)) {
+      map.set(m.date, {
+        date: m.date,
+        A: 0,
+        B: 0,
+        C: 0,
+      });
+    }
+    map.get(m.date)![m.zone] += m.count;
+  });
+
+  return Array.from(map.values()).sort(
+    (a, b) => a.date.localeCompare(b.date)
+  );
+}, [mortality, selectedZone]);
   // =====================================================
   // ✅ TARUH aggregatedData DI SINI (WAJIB DI SINI)
   // =====================================================
@@ -1677,87 +1704,122 @@ PM2.5 ≤ 35 µg/m³
         </h2>
 
         {/* Row: Mortality + Vision */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Mortality Logging */}
-          <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-semibold text-lg mb-3">
-              Mortality Detection / Logging
-            </h3>
-            <div className="flex flex-col sm:flex-row gap-3 mb-4">
-              <div className="flex-1">
-                <label className="text-sm text-gray-600">Date</label>
-                <input
-                  type="date"
-                  className="w-full border rounded-lg px-3 py-2"
-                  value={mortDate}
-                  onChange={(e) => setMortDate(e.target.value)}
-                />
-              </div>
-              <div className="w-32">
-                <label className="text-sm text-gray-600">Count</label>
-                <input
-                  type="number"
-                  className="w-full border rounded-lg px-3 py-2"
-                  min={0}
-                  value={mortCount}
-                  onChange={(e) => setMortCount(Number(e.target.value))}
-                />
-              </div>
-              <div className="flex-1">
-                <label className="text-sm text-gray-600">Notes</label>
-                <input
-                  className="w-full border rounded-lg px-3 py-2"
-                  placeholder="optional"
-                  value={mortNotes}
-                  onChange={(e) => setMortNotes(e.target.value)}
-                />
-              </div>
-              <button
-                onClick={addMortality}
-                disabled={isAllZone}
-                className={`px-4 py-2 rounded-lg text-white
-    ${isAllZone ? "bg-gray-400 cursor-not-allowed" : "bg-blue-600"}
-  `}
-              >
-                Add
-              </button>
+<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+  {/* Mortality Logging */}
+  <div className="bg-white rounded-2xl shadow p-4">
+    <h3 className="font-semibold text-lg mb-3">
+      Mortality Detection / Logging
+    </h3>
 
-              {isAllZone && (
-                <p className="text-xs text-gray-500 mt-2">
-                  Select a specific zone to input mortality data
-                </p>
-              )}
-            </div>
+    {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
+    {!isAllZone && (
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="flex-1">
+          <label className="text-sm text-gray-600">Date</label>
+          <input
+            type="date"
+            className="w-full border rounded-lg px-3 py-2"
+            value={mortDate}
+            onChange={(e) => setMortDate(e.target.value)}
+          />
+        </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-500">
-                    <th className="py-2">Date</th>
-                    <th className="py-2">Count</th>
-                    <th className="py-2">Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleMortality.length === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="py-3 text-gray-400">
-                        No records yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    visibleMortality.map((m, i) => (
-                      <tr key={`${m.date}-${i}`} className="border-t">
-                        <td className="py-2">{m.date}</td>
-                        <td className="py-2">{m.count}</td>
-                        <td className="py-2">{m.notes ?? "-"}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
+        <div className="w-32">
+          <label className="text-sm text-gray-600">Count</label>
+          <input
+            type="number"
+            className="w-full border rounded-lg px-3 py-2"
+            min={0}
+            value={mortCount}
+            onChange={(e) => setMortCount(Number(e.target.value))}
+          />
+        </div>
+
+        <div className="flex-1">
+          <label className="text-sm text-gray-600">Notes</label>
+          <input
+            className="w-full border rounded-lg px-3 py-2"
+            placeholder="optional"
+            value={mortNotes}
+            onChange={(e) => setMortNotes(e.target.value)}
+          />
+        </div>
+
+        <button
+          onClick={addMortality}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+        >
+          Add
+        </button>
+      </div>
+    )}
+
+    {/* ================= TABLE ================= */}
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          {isAllZone ? (
+            <tr className="text-left text-gray-500">
+              <th className="py-2">Date</th>
+              <th className="py-2 text-center">Zone A</th>
+              <th className="py-2 text-center">Zone B</th>
+              <th className="py-2 text-center">Zone C</th>
+            </tr>
+          ) : (
+            <tr className="text-left text-gray-500">
+              <th className="py-2">Date</th>
+              <th className="py-2">Count</th>
+              <th className="py-2">Notes</th>
+            </tr>
+          )}
+        </thead>
+
+        {/* ===== ALL ZONE BODY ===== */}
+        {isAllZone && (
+          <tbody>
+            {mortalitySummaryByDate.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="py-3 text-gray-400">
+                  No records yet.
+                </td>
+              </tr>
+            ) : (
+              mortalitySummaryByDate.map((row) => (
+                <tr key={row.date} className="border-t">
+                  <td className="py-2">{row.date}</td>
+                  <td className="py-2 text-center">{row.A}</td>
+                  <td className="py-2 text-center">{row.B}</td>
+                  <td className="py-2 text-center">{row.C}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        )}
+
+        {/* ===== SINGLE ZONE BODY ===== */}
+        {!isAllZone && (
+          <tbody>
+            {visibleMortality.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="py-3 text-gray-400">
+                  No records yet.
+                </td>
+              </tr>
+            ) : (
+              visibleMortality.map((m, i) => (
+                <tr key={`${m.date}-${i}`} className="border-t">
+                  <td className="py-2">{m.date}</td>
+                  <td className="py-2">{m.count}</td>
+                  <td className="py-2">{m.notes ?? "-"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        )}
+      </table>
+    </div>
+  </div>
+
 
           {/* Vision-based Activity (Prototype) */}
           <div className="bg-white rounded-2xl shadow p-4">
@@ -1825,7 +1887,7 @@ PM2.5 ≤ 35 µg/m³
           {/* Form */}
           <div className="bg-white rounded-2xl shadow p-4">
             <h3 className="font-semibold text-lg mb-3">
-              Feed & Water Consumption (Manual)
+              Feed & Water Consumption
             </h3>
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
@@ -1964,7 +2026,7 @@ PM2.5 ≤ 35 µg/m³
           {/* LEFT */}
           <div className="bg-white rounded-2xl shadow p-4">
             <h3 className="font-semibold text-lg mb-3">
-              Broiler Weight (Manual Input)
+              Broiler Weight 
             </h3>
 
             <div className="grid grid-cols-2 gap-3 mb-3">
