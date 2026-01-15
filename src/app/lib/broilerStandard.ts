@@ -1,0 +1,45 @@
+// src/lib/broilerStandard.ts
+export function standardBroilerWeight(day: number): number {
+  const standardWeightGram: Record<number, number> = {
+    1: 45,
+    2: 75,
+    3: 110,
+    4: 150,
+    5: 195,
+    6: 245,
+    7: 300,
+    8: 360,
+    9: 430,
+    10: 500,
+    11: 580,
+    12: 660,
+    13: 750,
+    14: 850,
+    15: 960,
+    16: 1070,
+    17: 1190,
+    18: 1320,
+    19: 1460,
+    20: 1610,
+    21: 1770,
+    22: 1940,
+    23: 2120,
+    24: 2310,
+    25: 2510,
+    26: 2720,
+    27: 2940,
+    28: 3170,
+    29: 3410,
+    30: 3660,
+    31: 3920,
+    32: 4190,
+    33: 4470,
+    34: 4760,
+    35: 5060,
+    36: 5370,
+    37: 5690,
+  };
+
+  const safeDay = Math.max(1, Math.min(day, 37));
+  return +(standardWeightGram[safeDay] / 1000).toFixed(3);
+}
