@@ -1054,7 +1054,8 @@ PM2.5 ≤ 35 µg/m³
 
         <div className="rounded-2xl overflow-hidden shadow-lg relative">
           <video
-            src="/video/broiler_video.mp4"
+            // src="/video/broiler_video.mp4"
+            src="/video/cctv ayam 1_tracked-stay.mp4"
             autoPlay
             loop
             muted
@@ -1765,7 +1766,8 @@ PM2.5 ≤ 35 µg/m³
             </h3>
             <div className="rounded-xl overflow-hidden relative">
               <video
-                src="/video/broiler_video.mp4"
+                // src="/video/broiler_video.mp4"
+                src="/video/cctv ayam 1_tracked-stay.mp4"
                 autoPlay
                 loop
                 muted
