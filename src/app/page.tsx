@@ -33,6 +33,7 @@ type WeightEntry = {
 };
 
 type MortalityEntry = {
+  zone: "A" | "B" | "C";
   date: string;
   count: number;
   notes?: string;
@@ -184,7 +185,6 @@ const zoneLegendConfig = {
   C: { label: "Zone C", dot: "bg-green-500", text: "text-green-500" },
 } as const;
 
-
 // ================= Tooltip Types =================
 type ScatterTooltipProps = {
   active?: boolean;
@@ -276,7 +276,23 @@ export default function DashboardPage() {
   const [actualWeight, setActualWeight] = useState<number>(0);
   // ====== Health & Behavior (prototype) ======
   // Mortality
-  const [mortality, setMortality] = useState<MortalityEntry[]>([]);
+const [mortality, setMortality] = useState<MortalityEntry[]>([
+  // ===== Date: 2026-01-01 =====
+  { zone: "A", date: "2025-07-01", count: 2, notes: "Heat stress" },
+  { zone: "B", date: "2025-07-01", count: 1 },
+  { zone: "C", date: "2025-07-01", count: 0 },
+
+  // ===== Date: 2026-01-02 =====
+  { zone: "A", date: "2025-07-08", count: 0 },
+  { zone: "B", date: "2025-07-08", count: 3, notes: "Ventilation issue" },
+  { zone: "C", date: "2025-07-08", count: 1 },
+
+  // ===== Date: 2026-01-03 =====
+  { zone: "A", date: "2025-07-15", count: 1 },
+  { zone: "B", date: "2025-07-15", count: 1 },
+  { zone: "C", date: "2025-07-15", count: 0 },
+]);
+
   const [mortDate, setMortDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
   );
@@ -468,6 +484,7 @@ PM2.5 ≤ 35 µg/m³
   const [selectedZone, setSelectedZone] = useState<"ALL" | "A" | "B" | "C">(
     "ALL"
   );
+  const isAllZone = selectedZone === "ALL";
 
   const [aggregation, setAggregation] = useState<
     "all" | "daily" | "weekly" | "monthly"
@@ -947,14 +964,26 @@ PM2.5 ≤ 35 µg/m³
 
   // ====== Handlers ======
   const addMortality = () => {
+    if (isAllZone) return; // HARD BLOCK
     if (!mortDate || Number.isNaN(mortCount)) return;
+
     setMortality((prev) => [
       ...prev,
-      { date: mortDate, count: mortCount, notes: mortNotes || undefined },
+      {
+        zone: selectedZone as "A" | "B" | "C",
+        date: mortDate,
+        count: mortCount,
+        notes: mortNotes || undefined,
+      },
     ]);
+
     setMortCount(0);
     setMortNotes("");
   };
+  const visibleMortality = useMemo(() => {
+    if (selectedZone === "ALL") return mortality;
+    return mortality.filter((m) => m.zone === selectedZone);
+  }, [mortality, selectedZone]);
 
   const addConsumption = () => {
     if (dayInput <= 0) return;
@@ -1424,199 +1453,221 @@ PM2.5 ≤ 35 µg/m³
       </section>
 
       {/* ======================= Correlation Insight ======================= */}
-<section>
-  <h2 className="text-2xl font-semibold mb-4">Correlation Insight</h2>
+      <section>
+        <h2 className="text-2xl font-semibold mb-4">Correlation Insight</h2>
 
-  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {/* ================= Temperature vs CO₂ ================= */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <h3 className="font-medium">Temperature vs CO₂</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Relationship between temperature and CO₂ concentration
+            </p>
 
-    {/* ================= Temperature vs CO₂ ================= */}
-    <div className="bg-white rounded-2xl shadow p-4">
-      <h3 className="font-medium">Temperature vs CO₂</h3>
-      <p className="text-xs text-gray-500 mb-3">
-        Relationship between temperature and CO₂ concentration
-      </p>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart
+                  margin={{ top: 20, right: 20, bottom: 40, left: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
 
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    type="number"
+                    dataKey="temp"
+                    domain={[20, 40]}
+                    label={{
+                      value: "Temperature (°C)",
+                      position: "bottom",
+                      offset: 20,
+                    }}
+                  />
 
-            <XAxis
-              type="number"
-              dataKey="temp"
-              domain={[20, 40]}
-              label={{ value: "Temperature (°C)", position: "bottom", offset: 20 }}
-            />
+                  <YAxis
+                    type="number"
+                    dataKey="co2"
+                    domain={[0, 1500]}
+                    label={{
+                      value: "CO₂ (ppm)",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: -10,
+                    }}
+                  />
 
-            <YAxis
-              type="number"
-              dataKey="co2"
-              domain={[0, 1500]}
-              label={{
-                value: "CO₂ (ppm)",
-                angle: -90,
-                position: "insideLeft",
-                offset: -10,
-              }}
-            />
+                  <Tooltip content={<TempCo2Tooltip />} />
 
-            <Tooltip content={<TempCo2Tooltip />} />
+                  {correlationSeries.map((s) => (
+                    <Scatter
+                      key={`${s.zone}-co2`}
+                      data={s.data}
+                      fill={s.color}
+                      opacity={0.7}
+                    />
+                  ))}
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
 
-            {correlationSeries.map((s) => (
-              <Scatter
-                key={`${s.zone}-co2`}
-                data={s.data}
-                fill={s.color}
-                opacity={0.7}
-              />
-            ))}
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
+            {/* Legend */}
+            <div className="flex justify-center gap-6 mt-3 text-sm">
+              {(selectedZone === "ALL"
+                ? (["A", "B", "C"] as const)
+                : ([selectedZone] as const)
+              ).map((z) => (
+                <span
+                  key={z}
+                  className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
+                >
+                  <span
+                    className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`}
+                  />
+                  {zoneLegendConfig[z].label}
+                </span>
+              ))}
+            </div>
+          </div>
 
-      {/* Legend */}
-      <div className="flex justify-center gap-6 mt-3 text-sm">
-        {(selectedZone === "ALL"
-          ? (["A", "B", "C"] as const)
-          : ([selectedZone] as const)
-        ).map((z) => (
-          <span
-            key={z}
-            className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
-          >
-            <span className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`} />
-            {zoneLegendConfig[z].label}
-          </span>
-        ))}
-      </div>
-    </div>
+          {/* ================= Temperature vs NH₃ ================= */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <h3 className="font-medium">Temperature vs NH₃</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Relationship between temperature and ammonia level
+            </p>
 
-    {/* ================= Temperature vs NH₃ ================= */}
-    <div className="bg-white rounded-2xl shadow p-4">
-      <h3 className="font-medium">Temperature vs NH₃</h3>
-      <p className="text-xs text-gray-500 mb-3">
-        Relationship between temperature and ammonia level
-      </p>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart
+                  margin={{ top: 20, right: 20, bottom: 40, left: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
 
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    type="number"
+                    dataKey="temp"
+                    domain={[20, 40]}
+                    label={{
+                      value: "Temperature (°C)",
+                      position: "bottom",
+                      offset: 20,
+                    }}
+                  />
 
-            <XAxis
-              type="number"
-              dataKey="temp"
-              domain={[20, 40]}
-              label={{ value: "Temperature (°C)", position: "bottom", offset: 20 }}
-            />
+                  <YAxis
+                    type="number"
+                    dataKey="nh3"
+                    domain={[0, 6]}
+                    label={{
+                      value: "NH₃ (ppm)",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: -10,
+                    }}
+                  />
 
-            <YAxis
-              type="number"
-              dataKey="nh3"
-              domain={[0, 6]}
-              label={{
-                value: "NH₃ (ppm)",
-                angle: -90,
-                position: "insideLeft",
-                offset: -10,
-              }}
-            />
+                  <Tooltip content={<TempNh3Tooltip />} />
 
-            <Tooltip content={<TempNh3Tooltip />} />
+                  {correlationSeries.map((s) => (
+                    <Scatter
+                      key={`${s.zone}-nh3`}
+                      data={s.data}
+                      fill={s.color}
+                      opacity={0.7}
+                    />
+                  ))}
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
 
-            {correlationSeries.map((s) => (
-              <Scatter
-                key={`${s.zone}-nh3`}
-                data={s.data}
-                fill={s.color}
-                opacity={0.7}
-              />
-            ))}
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
+            {/* Legend */}
+            <div className="flex justify-center gap-6 mt-3 text-sm">
+              {(selectedZone === "ALL"
+                ? (["A", "B", "C"] as const)
+                : ([selectedZone] as const)
+              ).map((z) => (
+                <span
+                  key={z}
+                  className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
+                >
+                  <span
+                    className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`}
+                  />
+                  {zoneLegendConfig[z].label}
+                </span>
+              ))}
+            </div>
+          </div>
 
-      {/* Legend */}
-      <div className="flex justify-center gap-6 mt-3 text-sm">
-        {(selectedZone === "ALL"
-          ? (["A", "B", "C"] as const)
-          : ([selectedZone] as const)
-        ).map((z) => (
-          <span
-            key={z}
-            className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
-          >
-            <span className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`} />
-            {zoneLegendConfig[z].label}
-          </span>
-        ))}
-      </div>
-    </div>
+          {/* ================= Humidity vs PM2.5 ================= */}
+          <div className="bg-white rounded-2xl shadow p-4">
+            <h3 className="font-medium">Humidity vs PM2.5</h3>
+            <p className="text-xs text-gray-500 mb-3">
+              Relationship between humidity and PM2.5 concentration
+            </p>
 
-    {/* ================= Humidity vs PM2.5 ================= */}
-    <div className="bg-white rounded-2xl shadow p-4">
-      <h3 className="font-medium">Humidity vs PM2.5</h3>
-      <p className="text-xs text-gray-500 mb-3">
-        Relationship between humidity and PM2.5 concentration
-      </p>
+            <div className="h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <ScatterChart
+                  margin={{ top: 20, right: 20, bottom: 40, left: 20 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" />
 
-      <div className="h-64">
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis
+                    type="number"
+                    dataKey="humidity"
+                    domain={[40, 100]}
+                    label={{
+                      value: "Humidity (%)",
+                      position: "bottom",
+                      offset: 20,
+                    }}
+                  />
 
-            <XAxis
-              type="number"
-              dataKey="humidity"
-              domain={[40, 100]}
-              label={{ value: "Humidity (%)", position: "bottom", offset: 20 }}
-            />
+                  <YAxis
+                    type="number"
+                    dataKey="pm25"
+                    domain={[0, 50]}
+                    label={{
+                      value: "PM2.5 (µg/m³)",
+                      angle: -90,
+                      position: "insideLeft",
+                      offset: -10,
+                    }}
+                  />
 
-            <YAxis
-              type="number"
-              dataKey="pm25"
-              domain={[0, 50]}
-              label={{
-                value: "PM2.5 (µg/m³)",
-                angle: -90,
-                position: "insideLeft",
-                offset: -10,
-              }}
-            />
+                  <Tooltip content={<HumiPm25Tooltip />} />
 
-            <Tooltip content={<HumiPm25Tooltip />} />
+                  {correlationSeries.map((s) => (
+                    <Scatter
+                      key={`${s.zone}-pm25`}
+                      data={s.data}
+                      fill={s.color}
+                      opacity={0.7}
+                    />
+                  ))}
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
 
-            {correlationSeries.map((s) => (
-              <Scatter
-                key={`${s.zone}-pm25`}
-                data={s.data}
-                fill={s.color}
-                opacity={0.7}
-              />
-            ))}
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
-
-      {/* Legend */}
-      <div className="flex justify-center gap-6 mt-3 text-sm">
-        {(selectedZone === "ALL"
-          ? (["A", "B", "C"] as const)
-          : ([selectedZone] as const)
-        ).map((z) => (
-          <span
-            key={z}
-            className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
-          >
-            <span className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`} />
-            {zoneLegendConfig[z].label}
-          </span>
-        ))}
-      </div>
-    </div>
-
-  </div>
-</section>
+            {/* Legend */}
+            <div className="flex justify-center gap-6 mt-3 text-sm">
+              {(selectedZone === "ALL"
+                ? (["A", "B", "C"] as const)
+                : ([selectedZone] as const)
+              ).map((z) => (
+                <span
+                  key={z}
+                  className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
+                >
+                  <span
+                    className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`}
+                  />
+                  {zoneLegendConfig[z].label}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
 
       {/* ============ Health & Behavior Monitoring (Prototype) ============ */}
       <section>
@@ -1629,7 +1680,7 @@ PM2.5 ≤ 35 µg/m³
           {/* Mortality Logging */}
           <div className="bg-white rounded-2xl shadow p-4">
             <h3 className="font-semibold text-lg mb-3">
-              Mortality Detection / Logging (Manual)
+              Mortality Detection / Logging
             </h3>
             <div className="flex flex-col sm:flex-row gap-3 mb-4">
               <div className="flex-1">
@@ -1662,10 +1713,19 @@ PM2.5 ≤ 35 µg/m³
               </div>
               <button
                 onClick={addMortality}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                disabled={isAllZone}
+                className={`px-4 py-2 rounded-lg text-white
+    ${isAllZone ? "bg-gray-400 cursor-not-allowed" : "bg-blue-600"}
+  `}
               >
                 Add
               </button>
+
+              {isAllZone && (
+                <p className="text-xs text-gray-500 mt-2">
+                  Select a specific zone to input mortality data
+                </p>
+              )}
             </div>
 
             <div className="overflow-x-auto">
@@ -1678,14 +1738,14 @@ PM2.5 ≤ 35 µg/m³
                   </tr>
                 </thead>
                 <tbody>
-                  {mortality.length === 0 ? (
+                  {visibleMortality.length === 0 ? (
                     <tr>
                       <td colSpan={3} className="py-3 text-gray-400">
                         No records yet.
                       </td>
                     </tr>
                   ) : (
-                    mortality.map((m, i) => (
+                    visibleMortality.map((m, i) => (
                       <tr key={`${m.date}-${i}`} className="border-t">
                         <td className="py-2">{m.date}</td>
                         <td className="py-2">{m.count}</td>
