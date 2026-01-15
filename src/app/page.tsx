@@ -177,6 +177,14 @@ const PARAM_CONFIG = {
     color: "#a855f7",
   },
 } as const;
+
+const zoneLegendConfig = {
+  A: { label: "Zone A", dot: "bg-red-500", text: "text-red-500" },
+  B: { label: "Zone B", dot: "bg-blue-500", text: "text-blue-500" },
+  C: { label: "Zone C", dot: "bg-green-500", text: "text-green-500" },
+} as const;
+
+
 // ================= Tooltip Types =================
 type ScatterTooltipProps = {
   active?: boolean;
@@ -562,6 +570,34 @@ PM2.5 ≤ 35 µg/m³
   const latestA = zoneData.A.at(-1);
   const latestB = zoneData.B.at(-1);
   const latestC = zoneData.C.at(-1);
+  const correlationSeries = useMemo(() => {
+    const applyAgg = (data: DataPoint[]) => {
+      if (appliedAggregation === "all") return data;
+      if (appliedAggregation === "daily")
+        return data.filter((_, i) => i % 24 === 0);
+      if (appliedAggregation === "weekly")
+        return data.filter((_, i) => i % (24 * 7) === 0);
+      if (appliedAggregation === "monthly")
+        return data.filter((_, i) => i % (24 * 30) === 0);
+      return data;
+    };
+
+    if (selectedZone === "ALL") {
+      return [
+        { zone: "A", color: ZONE_COLORS.A, data: applyAgg(zoneData.A) },
+        { zone: "B", color: ZONE_COLORS.B, data: applyAgg(zoneData.B) },
+        { zone: "C", color: ZONE_COLORS.C, data: applyAgg(zoneData.C) },
+      ];
+    }
+
+    return [
+      {
+        zone: selectedZone,
+        color: ZONE_COLORS[selectedZone],
+        data: aggregatedData,
+      },
+    ];
+  }, [selectedZone, appliedAggregation, aggregatedData, zoneData]);
 
   const trendSeries = useMemo(() => {
     if (selectedZone === "ALL") {
@@ -856,6 +892,21 @@ PM2.5 ≤ 35 µg/m³
   ];
 
   // ====== Chart data for consumption vs standard ======
+  const aggregatedAllZoneData = useMemo(() => {
+    const applyAgg = (data: any[]) => {
+      if (appliedAggregation === "all") return data;
+      if (appliedAggregation === "daily")
+        return data.filter((_, i) => i % 24 === 0);
+      if (appliedAggregation === "weekly")
+        return data.filter((_, i) => i % (24 * 7) === 0);
+      if (appliedAggregation === "monthly")
+        return data.filter((_, i) => i % (24 * 30) === 0);
+      return data;
+    };
+
+    return applyAgg(allZoneCombinedData);
+  }, [allZoneCombinedData, appliedAggregation]);
+
   const consumptionChartData = useMemo(() => {
     const days = [...consumptions]
       .sort((a, b) => a.day - b.day)
@@ -1114,7 +1165,9 @@ PM2.5 ≤ 35 µg/m³
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={
-                  selectedZone === "ALL" ? allZoneCombinedData : aggregatedData
+                  selectedZone === "ALL"
+                    ? aggregatedAllZoneData
+                    : aggregatedData
                 }
               >
                 <CartesianGrid strokeDasharray="3 3" />
@@ -1165,7 +1218,9 @@ PM2.5 ≤ 35 µg/m³
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={
-                  selectedZone === "ALL" ? allZoneCombinedData : aggregatedData
+                  selectedZone === "ALL"
+                    ? aggregatedAllZoneData
+                    : aggregatedData
                 }
               >
                 <CartesianGrid strokeDasharray="3 3" />
@@ -1216,7 +1271,9 @@ PM2.5 ≤ 35 µg/m³
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={
-                  selectedZone === "ALL" ? allZoneCombinedData : aggregatedData
+                  selectedZone === "ALL"
+                    ? aggregatedAllZoneData
+                    : aggregatedData
                 }
               >
                 <CartesianGrid strokeDasharray="3 3" />
@@ -1267,7 +1324,9 @@ PM2.5 ≤ 35 µg/m³
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={
-                  selectedZone === "ALL" ? allZoneCombinedData : aggregatedData
+                  selectedZone === "ALL"
+                    ? aggregatedAllZoneData
+                    : aggregatedData
                 }
               >
                 <CartesianGrid strokeDasharray="3 3" />
@@ -1318,7 +1377,9 @@ PM2.5 ≤ 35 µg/m³
             <ResponsiveContainer width="100%" height="100%">
               <LineChart
                 data={
-                  selectedZone === "ALL" ? allZoneCombinedData : aggregatedData
+                  selectedZone === "ALL"
+                    ? aggregatedAllZoneData
+                    : aggregatedData
                 }
               >
                 <CartesianGrid strokeDasharray="3 3" />
@@ -1363,161 +1424,199 @@ PM2.5 ≤ 35 µg/m³
       </section>
 
       {/* ======================= Correlation Insight ======================= */}
-      <section>
-        <h2 className="text-2xl font-semibold mb-4">Correlation Insight</h2>
+<section>
+  <h2 className="text-2xl font-semibold mb-4">Correlation Insight</h2>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* ================= Temperature vs CO₂ ================= */}
-          <div className="bg-white rounded-2xl shadow p-4 h-80">
-            <h3 className="font-medium">Temperature vs CO₂</h3>
-            <p className="text-xs text-gray-500 mb-2">
-              Relationship between indoor temperature and CO₂ concentration
-            </p>
+  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
 
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart
-                margin={{ top: 20, right: 20, bottom: 45, left: 60 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
+    {/* ================= Temperature vs CO₂ ================= */}
+    <div className="bg-white rounded-2xl shadow p-4">
+      <h3 className="font-medium">Temperature vs CO₂</h3>
+      <p className="text-xs text-gray-500 mb-3">
+        Relationship between temperature and CO₂ concentration
+      </p>
 
-                <XAxis
-                  type="number"
-                  dataKey="temp"
-                  domain={[20, 40]}
-                  tickFormatter={(v) => `${v}`}
-                  label={{
-                    value: "Temperature (°C)",
-                    position: "insideBottom",
-                    offset: -10,
-                  }}
-                />
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" />
 
-                <YAxis
-                  type="number"
-                  dataKey="co2"
-                  domain={[0, 1500]}
-                  tickFormatter={(v) => `${v}`}
-                  label={{
-                    value: "CO₂ (ppm)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
+            <XAxis
+              type="number"
+              dataKey="temp"
+              domain={[20, 40]}
+              label={{ value: "Temperature (°C)", position: "bottom", offset: 20 }}
+            />
 
-                <Tooltip content={<TempCo2Tooltip />} />
+            <YAxis
+              type="number"
+              dataKey="co2"
+              domain={[0, 1500]}
+              label={{
+                value: "CO₂ (ppm)",
+                angle: -90,
+                position: "insideLeft",
+                offset: -10,
+              }}
+            />
 
-                <Scatter
-                  data={
-                    selectedZone === "ALL" ? allData : zoneData[selectedZone]
-                  }
-                  fill="#60a5fa"
-                  opacity={0.65}
-                />
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
+            <Tooltip content={<TempCo2Tooltip />} />
 
-          {/* ================= Temperature vs NH₃ ================= */}
-          <div className="bg-white rounded-2xl shadow p-4 h-80">
-            <h3 className="font-medium">Temperature vs NH₃</h3>
-            <p className="text-xs text-gray-500 mb-2">
-              Relationship between indoor temperature and ammonia level
-            </p>
+            {correlationSeries.map((s) => (
+              <Scatter
+                key={`${s.zone}-co2`}
+                data={s.data}
+                fill={s.color}
+                opacity={0.7}
+              />
+            ))}
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
 
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart
-                margin={{ top: 20, right: 20, bottom: 45, left: 60 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
+      {/* Legend */}
+      <div className="flex justify-center gap-6 mt-3 text-sm">
+        {(selectedZone === "ALL"
+          ? (["A", "B", "C"] as const)
+          : ([selectedZone] as const)
+        ).map((z) => (
+          <span
+            key={z}
+            className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
+          >
+            <span className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`} />
+            {zoneLegendConfig[z].label}
+          </span>
+        ))}
+      </div>
+    </div>
 
-                <XAxis
-                  type="number"
-                  dataKey="temp"
-                  domain={[20, 40]}
-                  tickFormatter={(v) => `${v}`}
-                  label={{
-                    value: "Temperature (°C)",
-                    position: "insideBottom",
-                    offset: -10,
-                  }}
-                />
+    {/* ================= Temperature vs NH₃ ================= */}
+    <div className="bg-white rounded-2xl shadow p-4">
+      <h3 className="font-medium">Temperature vs NH₃</h3>
+      <p className="text-xs text-gray-500 mb-3">
+        Relationship between temperature and ammonia level
+      </p>
 
-                <YAxis
-                  type="number"
-                  dataKey="nh3"
-                  domain={[0, 5]}
-                  tickFormatter={(v) => `${v}`}
-                  label={{
-                    value: "NH₃ (ppm)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" />
 
-                <Tooltip content={<TempNh3Tooltip />} />
+            <XAxis
+              type="number"
+              dataKey="temp"
+              domain={[20, 40]}
+              label={{ value: "Temperature (°C)", position: "bottom", offset: 20 }}
+            />
 
-                <Scatter
-                  data={
-                    selectedZone === "ALL" ? allData : zoneData[selectedZone]
-                  }
-                  fill="#fbbf24"
-                  opacity={0.65}
-                />
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
+            <YAxis
+              type="number"
+              dataKey="nh3"
+              domain={[0, 6]}
+              label={{
+                value: "NH₃ (ppm)",
+                angle: -90,
+                position: "insideLeft",
+                offset: -10,
+              }}
+            />
 
-          {/* ================= Humidity vs PM2.5 ================= */}
-          <div className="bg-white rounded-2xl shadow p-4 h-80">
-            <h3 className="font-medium">Humidity vs PM2.5</h3>
-            <p className="text-xs text-gray-500 mb-2">
-              Relationship between humidity and PM2.5 concentration
-            </p>
+            <Tooltip content={<TempNh3Tooltip />} />
 
-            <ResponsiveContainer width="100%" height="100%">
-              <ScatterChart
-                margin={{ top: 20, right: 20, bottom: 45, left: 60 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" />
+            {correlationSeries.map((s) => (
+              <Scatter
+                key={`${s.zone}-nh3`}
+                data={s.data}
+                fill={s.color}
+                opacity={0.7}
+              />
+            ))}
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
 
-                <XAxis
-                  type="number"
-                  dataKey="humidity"
-                  domain={[40, 100]}
-                  tickFormatter={(v) => `${v}`}
-                  label={{
-                    value: "Humidity (%)",
-                    position: "insideBottom",
-                    offset: -10,
-                  }}
-                />
+      {/* Legend */}
+      <div className="flex justify-center gap-6 mt-3 text-sm">
+        {(selectedZone === "ALL"
+          ? (["A", "B", "C"] as const)
+          : ([selectedZone] as const)
+        ).map((z) => (
+          <span
+            key={z}
+            className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
+          >
+            <span className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`} />
+            {zoneLegendConfig[z].label}
+          </span>
+        ))}
+      </div>
+    </div>
 
-                <YAxis
-                  type="number"
-                  dataKey="pm25"
-                  domain={[0, 50]}
-                  tickFormatter={(v) => `${v}`}
-                  label={{
-                    value: "PM2.5 (µg/m³)",
-                    angle: -90,
-                    position: "insideLeft",
-                  }}
-                />
+    {/* ================= Humidity vs PM2.5 ================= */}
+    <div className="bg-white rounded-2xl shadow p-4">
+      <h3 className="font-medium">Humidity vs PM2.5</h3>
+      <p className="text-xs text-gray-500 mb-3">
+        Relationship between humidity and PM2.5 concentration
+      </p>
 
-                <Tooltip content={<HumiPm25Tooltip />} />
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 20 }}>
+            <CartesianGrid strokeDasharray="3 3" />
 
-                <Scatter
-                  data={
-                    selectedZone === "ALL" ? allData : zoneData[selectedZone]
-                  }
-                  fill="#a855f7"
-                  opacity={0.65}
-                />
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      </section>
+            <XAxis
+              type="number"
+              dataKey="humidity"
+              domain={[40, 100]}
+              label={{ value: "Humidity (%)", position: "bottom", offset: 20 }}
+            />
+
+            <YAxis
+              type="number"
+              dataKey="pm25"
+              domain={[0, 50]}
+              label={{
+                value: "PM2.5 (µg/m³)",
+                angle: -90,
+                position: "insideLeft",
+                offset: -10,
+              }}
+            />
+
+            <Tooltip content={<HumiPm25Tooltip />} />
+
+            {correlationSeries.map((s) => (
+              <Scatter
+                key={`${s.zone}-pm25`}
+                data={s.data}
+                fill={s.color}
+                opacity={0.7}
+              />
+            ))}
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Legend */}
+      <div className="flex justify-center gap-6 mt-3 text-sm">
+        {(selectedZone === "ALL"
+          ? (["A", "B", "C"] as const)
+          : ([selectedZone] as const)
+        ).map((z) => (
+          <span
+            key={z}
+            className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
+          >
+            <span className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`} />
+            {zoneLegendConfig[z].label}
+          </span>
+        ))}
+      </div>
+    </div>
+
+  </div>
+</section>
 
       {/* ============ Health & Behavior Monitoring (Prototype) ============ */}
       <section>
