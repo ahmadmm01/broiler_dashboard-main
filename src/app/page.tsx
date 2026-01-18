@@ -281,8 +281,24 @@ export default function DashboardPage() {
   const [data, setData] = useState<DataPoint[]>([]);
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
-  const [weights, setWeights] = useState<WeightEntry[]>([]);
-  const [weightDay, setWeightDay] = useState<number>(1);
+  const [weights, setWeights] = useState<WeightEntry[]>(() => {
+    // Generate dummy weight data for days 1-30
+    const dummyWeights: WeightEntry[] = [];
+    for (let day = 1; day <= 30; day++) {
+      const stdWeight = standardBroilerWeight(day);
+      // Add realistic variation: ±3% from standard
+      const variance = (Math.random() - 0.5) * 0.06;
+      const actualWeight = +(stdWeight * (1 + variance)).toFixed(3);
+      
+      dummyWeights.push({
+        day,
+        stdWeightKg: stdWeight,
+        actualWeightKg: actualWeight,
+      });
+    }
+    return dummyWeights;
+  });
+  const [weightDay, setWeightDay] = useState<number>(31);
   const [actualWeight, setActualWeight] = useState<number>(0);
   // ====== Health & Behavior (prototype) ======
   // Mortality
