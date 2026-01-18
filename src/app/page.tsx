@@ -12,6 +12,8 @@ import {
   CartesianGrid,
   ScatterChart,
   Scatter,
+  BarChart,
+  Bar,
 } from "recharts";
 
 // ========= Types =========
@@ -185,7 +187,6 @@ const PARAM_CONFIG = {
   },
 } as const;
 
-
 const zoneLegendConfig = {
   A: { label: "Zone A", dot: "bg-red-500", text: "text-red-500" },
   B: { label: "Zone B", dot: "bg-blue-500", text: "text-blue-500" },
@@ -254,10 +255,10 @@ function CardItem({ item }: CardItemProps) {
         item.color === "red"
           ? "bg-red-50 border-red-300"
           : item.color === "orange"
-          ? "bg-orange-50 border-orange-300"
-          : item.color === "yellow"
-          ? "bg-yellow-50 border-yellow-300"
-          : "bg-green-50 border-green-200"
+            ? "bg-orange-50 border-orange-300"
+            : item.color === "yellow"
+              ? "bg-yellow-50 border-yellow-300"
+              : "bg-green-50 border-green-200"
       } transition`}
     >
       <div className="text-3xl mb-2">{item.icon}</div>
@@ -283,22 +284,42 @@ export default function DashboardPage() {
   const [actualWeight, setActualWeight] = useState<number>(0);
   // ====== Health & Behavior (prototype) ======
   // Mortality
-const [mortality, setMortality] = useState<MortalityEntry[]>([
-  // ===== Date: 2026-01-01 =====
-  { zone: "A", date: "2025-07-01", count: 2, notes: "Heat stress" },
-  { zone: "B", date: "2025-07-01", count: 1 },
-  { zone: "C", date: "2025-07-01", count: 0 },
+  const [mortality, setMortality] = useState<MortalityEntry[]>([
+    // ===== Date: 2026-01-01 =====
+    { zone: "A", date: "2025-07-01", count: 2, notes: "Heat stress" },
+    { zone: "B", date: "2025-07-01", count: 1 },
+    { zone: "C", date: "2025-07-01", count: 0 },
 
-  // ===== Date: 2026-01-02 =====
-  { zone: "A", date: "2025-07-08", count: 0 },
-  { zone: "B", date: "2025-07-08", count: 3, notes: "Ventilation issue" },
-  { zone: "C", date: "2025-07-08", count: 1 },
+    // ===== Date: 2026-01-02 =====
+    { zone: "A", date: "2025-07-08", count: 0 },
+    { zone: "B", date: "2025-07-08", count: 3, notes: "Ventilation issue" },
+    { zone: "C", date: "2025-07-08", count: 1 },
 
-  // ===== Date: 2026-01-03 =====
-  { zone: "A", date: "2025-07-15", count: 1 },
-  { zone: "B", date: "2025-07-15", count: 1 },
-  { zone: "C", date: "2025-07-15", count: 0 },
-]);
+    // ===== Date: 2026-01-03 =====
+    { zone: "A", date: "2025-07-15", count: 1 },
+    { zone: "B", date: "2025-07-15", count: 1 },
+    { zone: "C", date: "2025-07-15", count: 0 },
+    
+    // ===== Date: 2026-01-04 =====
+    { zone: "A", date: "2025-07-22", count: 0 },
+    { zone: "B", date: "2025-07-22", count: 2 },
+    { zone: "C", date: "2025-07-22", count: 1, notes: "High NH3 levels" },
+    
+    // ===== Date: 2026-01-05 =====
+    { zone: "A", date: "2025-07-29", count: 1 },
+    { zone: "B", date: "2025-07-29", count: 0 },
+    { zone: "C", date: "2025-07-29", count: 2, notes: "Feed contamination" },
+    
+    // ===== Date: 2026-01-06 =====
+    { zone: "A", date: "2025-08-05", count: 0 },
+    { zone: "B", date: "2025-08-05", count: 1 },
+    { zone: "C", date: "2025-08-05", count: 0 },
+    
+    // ===== Date: 2026-01-07 =====
+    { zone: "A", date: "2025-08-12", count: 2, notes: "Heat wave" },
+    { zone: "B", date: "2025-08-12", count: 2 },
+    { zone: "C", date: "2025-08-12", count: 1 },
+  ]);
 
   const [mortDate, setMortDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
@@ -561,27 +582,27 @@ PM2.5 ≤ 35 µg/m³
       })),
     };
   }, [chartData]);
-const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
-  if (selectedZone !== "ALL") return [];
+  const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
+    if (selectedZone !== "ALL") return [];
 
-  const map = new Map<string, MortalitySummaryRow>();
+    const map = new Map<string, MortalitySummaryRow>();
 
-  mortality.forEach((m) => {
-    if (!map.has(m.date)) {
-      map.set(m.date, {
-        date: m.date,
-        A: 0,
-        B: 0,
-        C: 0,
-      });
-    }
-    map.get(m.date)![m.zone] += m.count;
-  });
+    mortality.forEach((m) => {
+      if (!map.has(m.date)) {
+        map.set(m.date, {
+          date: m.date,
+          A: 0,
+          B: 0,
+          C: 0,
+        });
+      }
+      map.get(m.date)![m.zone] += m.count;
+    });
 
-  return Array.from(map.values()).sort(
-    (a, b) => a.date.localeCompare(b.date)
-  );
-}, [mortality, selectedZone]);
+    return Array.from(map.values()).sort((a, b) =>
+      a.date.localeCompare(b.date)
+    );
+  }, [mortality, selectedZone]);
   // =====================================================
   // ✅ TARUH aggregatedData DI SINI (WAJIB DI SINI)
   // =====================================================
@@ -589,7 +610,7 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
     const base: DataPoint[] =
       selectedZone === "ALL"
         ? chartData
-        : zoneData[selectedZone as "A" | "B" | "C"] ?? [];
+        : (zoneData[selectedZone as "A" | "B" | "C"] ?? []);
 
     if (appliedAggregation === "all") return base;
     if (appliedAggregation === "daily")
@@ -1047,8 +1068,8 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
       </header>
 
       <hr className="border-gray-300 my-4" />
-      {/* Global Controls */}
-      <section className="bg-gray-50 rounded-2xl p-4 shadow-sm">
+      {/* Global Controls - Sticky */}
+      <section className="sticky top-0 z-50 bg-gray-50 rounded-2xl p-4 shadow-lg border-b-2 border-gray-300">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1057,7 +1078,7 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
             <select
               value={selectedZone}
               onChange={(e) => setSelectedZone(e.target.value as any)}
-              className="w-full border rounded-lg px-3 py-2"
+              className="w-full border rounded-lg px-3 py-2 font-semibold"
             >
               <option value="ALL">All Zones</option>
               <option value="A">Zone A</option>
@@ -1085,8 +1106,8 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
                   selectedZone === "A"
                     ? "/video/cctv ayam 1_tracked-stay.mp4"
                     : selectedZone === "B"
-                    ? "/video/cctv ayam 1_tracked-stay.mp4"
-                    : "/video/cctv ayam 1_tracked-stay.mp4"
+                      ? "/video/cctv ayam 1_tracked-stay.mp4"
+                      : "/video/cctv ayam 1_tracked-stay.mp4"
                 }
                 autoPlay
                 loop
@@ -1105,15 +1126,18 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
         {selectedZone === "ALL" && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {(["A", "B", "C"] as const).map((zone) => (
-              <div key={zone} className="rounded-2xl overflow-hidden shadow-lg relative">
+              <div
+                key={zone}
+                className="rounded-2xl overflow-hidden shadow-lg relative"
+              >
                 <div className="relative">
                   <video
                     src={
                       zone === "A"
                         ? "/video/cctv ayam 1_tracked-stay.mp4"
                         : zone === "B"
-                        ? "/video/cctv ayam 1_tracked-stay.mp4"
-                        : "/video/cctv ayam 1_tracked-stay.mp4"
+                          ? "/video/cctv ayam 1_tracked-stay.mp4"
+                          : "/video/cctv ayam 1_tracked-stay.mp4"
                     }
                     autoPlay
                     loop
@@ -1742,138 +1766,26 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
           Health & Behavior Monitoring
         </h2>
 
-        {/* Row: Mortality + Vision */}
-<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-  {/* Mortality Logging */}
-  <div className="bg-white rounded-2xl shadow p-4">
-    <h3 className="font-semibold text-lg mb-3">
-      Mortality Detection / Logging
-    </h3>
-
-    {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
-    {!isAllZone && (
-      <div className="flex flex-col sm:flex-row gap-3 mb-4">
-        <div className="flex-1">
-          <label className="text-sm text-gray-600">Date</label>
-          <input
-            type="date"
-            className="w-full border rounded-lg px-3 py-2"
-            value={mortDate}
-            onChange={(e) => setMortDate(e.target.value)}
-          />
-        </div>
-
-        <div className="w-32">
-          <label className="text-sm text-gray-600">Count</label>
-          <input
-            type="number"
-            className="w-full border rounded-lg px-3 py-2"
-            min={0}
-            value={mortCount}
-            onChange={(e) => setMortCount(Number(e.target.value))}
-          />
-        </div>
-
-        <div className="flex-1">
-          <label className="text-sm text-gray-600">Notes</label>
-          <input
-            className="w-full border rounded-lg px-3 py-2"
-            placeholder="optional"
-            value={mortNotes}
-            onChange={(e) => setMortNotes(e.target.value)}
-          />
-        </div>
-
-        <button
-          onClick={addMortality}
-          className="px-4 py-2 bg-blue-600 text-white rounded-lg"
-        >
-          Add
-        </button>
-      </div>
-    )}
-
-    {/* ================= TABLE ================= */}
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          {isAllZone ? (
-            <tr className="text-left text-gray-500">
-              <th className="py-2">Date</th>
-              <th className="py-2 text-center">Zone A</th>
-              <th className="py-2 text-center">Zone B</th>
-              <th className="py-2 text-center">Zone C</th>
-            </tr>
-          ) : (
-            <tr className="text-left text-gray-500">
-              <th className="py-2">Date</th>
-              <th className="py-2">Count</th>
-              <th className="py-2">Notes</th>
-            </tr>
-          )}
-        </thead>
-
-        {/* ===== ALL ZONE BODY ===== */}
-        {isAllZone && (
-          <tbody>
-            {mortalitySummaryByDate.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="py-3 text-gray-400">
-                  No records yet.
-                </td>
-              </tr>
-            ) : (
-              mortalitySummaryByDate.map((row) => (
-                <tr key={row.date} className="border-t">
-                  <td className="py-2">{row.date}</td>
-                  <td className="py-2 text-center">{row.A}</td>
-                  <td className="py-2 text-center">{row.B}</td>
-                  <td className="py-2 text-center">{row.C}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        )}
-
-        {/* ===== SINGLE ZONE BODY ===== */}
-        {!isAllZone && (
-          <tbody>
-            {visibleMortality.length === 0 ? (
-              <tr>
-                <td colSpan={3} className="py-3 text-gray-400">
-                  No records yet.
-                </td>
-              </tr>
-            ) : (
-              visibleMortality.map((m, i) => (
-                <tr key={`${m.date}-${i}`} className="border-t">
-                  <td className="py-2">{m.date}</td>
-                  <td className="py-2">{m.count}</td>
-                  <td className="py-2">{m.notes ?? "-"}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        )}
-      </table>
-    </div>
-  </div>
-
-
-          {/* Vision-based Activity (Prototype) */}
-          <div className="bg-white rounded-2xl shadow p-4">
+        {/* Vision-based Activity (Prototype) */}
+        {selectedZone !== "ALL" && (
+          <div className="bg-white rounded-2xl shadow p-4 mb-6">
             <h3 className="font-semibold text-lg mb-3">
-              Chicken Activity Analysis (Vision-Based)
+              Chicken Activity Analysis (Vision-Based) – Zone {selectedZone}
             </h3>
-            <div className="rounded-xl overflow-hidden relative">
+            <div className="rounded-xl overflow-hidden relative w-full" style={{ aspectRatio: '16/9' }}>
               <video
-                // src="/video/broiler_video.mp4"
-                src="/video/cctv ayam 1_tracked-stay.mp4"
+                src={
+                  selectedZone === "A"
+                    ? "/video/cctv ayam 1.mp4"
+                    : selectedZone === "B"
+                      ? "/video/cctv ayam 1.mp4"
+                      : "/video/cctv ayam 1.mp4"
+                }
                 autoPlay
                 loop
                 muted
                 playsInline
-                className="w-full object-cover max-h-64"
+                className="w-full h-full object-cover"
               />
               {/* Pseudo heatmap overlay */}
               <div
@@ -1902,21 +1814,246 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
                     activityScore < 35
                       ? "text-red-600"
                       : activityScore < 60
-                      ? "text-yellow-600"
-                      : "text-green-700"
+                        ? "text-yellow-600"
+                        : "text-green-700"
                   }`}
                 >
                   {activityScore < 35
                     ? "Abnormal (Low)"
                     : activityScore < 60
-                    ? "Moderate"
-                    : "Normal"}
+                      ? "Moderate"
+                      : "Normal"}
                 </div>
               </div>
               <div className="p-3 rounded-lg bg-gray-50">
                 <div className="text-gray-500">Reason</div>
                 <div className="text-xs">{abnormalReason}</div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* All zones activity view */}
+        {selectedZone === "ALL" && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            {(["A", "B", "C"] as const).map((zone) => (
+              <div key={zone} className="bg-white rounded-2xl shadow p-4">
+                <h3 className="font-semibold text-lg mb-3">
+                  Activity Analysis – Zone {zone}
+                </h3>
+                <div className="rounded-xl overflow-hidden relative w-full" style={{ aspectRatio: '16/9' }}>
+                  <video
+                    src={
+                      zone === "A"
+                        ? "/video/cctv ayam 1.mp4"
+                        : zone === "B"
+                          ? "/video/cctv ayam 1.mp4"
+                          : "/video/cctv ayam 1.mp4"
+                    }
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Pseudo heatmap overlay */}
+                  <div
+                    className="absolute inset-0 pointer-events-none opacity-40"
+                    style={{
+                      background:
+                        "radial-gradient(circle at 30% 40%, #ff0000, transparent 40%), radial-gradient(circle at 70% 60%, #ffbb00, transparent 35%), radial-gradient(circle at 50% 30%, #ffff00d7, transparent 30%)",
+                    }}
+                  />
+                  <div className="absolute bottom-2 right-2 bg-white/80 backdrop-blur px-2 py-0.5 rounded text-xs">
+                    Heatmap
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 text-xs">
+                  <div className="p-2 rounded-lg bg-gray-50">
+                    <div className="text-gray-500">Activity Score</div>
+                    <div className="text-lg font-semibold">
+                      {Math.round(activityScore)}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-gray-50">
+                    <div className="text-gray-500">Status</div>
+                    <div
+                      className={`font-semibold ${
+                        activityScore < 35
+                          ? "text-red-600"
+                          : activityScore < 60
+                            ? "text-yellow-600"
+                            : "text-green-700"
+                      }`}
+                    >
+                      {activityScore < 35
+                        ? "Abnormal"
+                        : activityScore < 60
+                          ? "Moderate"
+                          : "Normal"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Row: Mortality */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+          {/* Mortality Logging - Table */}
+          <div className="lg:col-span-1 bg-white rounded-2xl shadow p-4">
+            <h3 className="font-semibold text-lg mb-3">
+              Mortality Detection / Logging
+            </h3>
+
+            {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
+            {!isAllZone && (
+              <div className="flex flex-col gap-3 mb-4">
+                <div>
+                  <label className="text-sm text-gray-600">Date</label>
+                  <input
+                    type="date"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={mortDate}
+                    onChange={(e) => setMortDate(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Count</label>
+                  <input
+                    type="number"
+                    className="w-full border rounded-lg px-3 py-2"
+                    min={0}
+                    value={mortCount}
+                    onChange={(e) => setMortCount(Number(e.target.value))}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Notes</label>
+                  <input
+                    className="w-full border rounded-lg px-3 py-2"
+                    placeholder="optional"
+                    value={mortNotes}
+                    onChange={(e) => setMortNotes(e.target.value)}
+                  />
+                </div>
+
+                <button
+                  onClick={addMortality}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                >
+                  Add
+                </button>
+              </div>
+            )}
+
+            {/* ================= TABLE ================= */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  {isAllZone ? (
+                    <tr className="text-left text-gray-500">
+                      <th className="py-2">Date</th>
+                      <th className="py-2 text-center">Zone A</th>
+                      <th className="py-2 text-center">Zone B</th>
+                      <th className="py-2 text-center">Zone C</th>
+                    </tr>
+                  ) : (
+                    <tr className="text-left text-gray-500">
+                      <th className="py-2">Date</th>
+                      <th className="py-2">Count</th>
+                      <th className="py-2">Notes</th>
+                    </tr>
+                  )}
+                </thead>
+
+                {/* ===== ALL ZONE BODY ===== */}
+                {isAllZone && (
+                  <tbody>
+                    {mortalitySummaryByDate.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="py-3 text-gray-400">
+                          No records yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      mortalitySummaryByDate.map((row) => (
+                        <tr key={row.date} className="border-t">
+                          <td className="py-2">{row.date}</td>
+                          <td className="py-2 text-center">{row.A}</td>
+                          <td className="py-2 text-center">{row.B}</td>
+                          <td className="py-2 text-center">{row.C}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                )}
+
+                {/* ===== SINGLE ZONE BODY ===== */}
+                {!isAllZone && (
+                  <tbody>
+                    {visibleMortality.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-3 text-gray-400">
+                          No records yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      visibleMortality.map((m, i) => (
+                        <tr key={`${m.date}-${i}`} className="border-t">
+                          <td className="py-2">{m.date}</td>
+                          <td className="py-2">{m.count}</td>
+                          <td className="py-2">{m.notes ?? "-"}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                )}
+              </table>
+            </div>
+          </div>
+
+          {/* Mortality Chart */}
+          <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4">
+            <h3 className="font-semibold text-lg mb-3">
+              Mortality Trend {!isAllZone && `- Zone ${selectedZone}`}
+            </h3>
+            <div className="h-64">
+              {isAllZone ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={mortalitySummaryByDate}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="A" fill="#ef4444" name="Zone A" />
+                    <Bar dataKey="B" fill="#3b82f6" name="Zone B" />
+                    <Bar dataKey="C" fill="#10b981" name="Zone C" />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={visibleMortality}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="count"
+                      stroke={ZONE_COLORS[selectedZone]}
+                      dot={{ r: 4 }}
+                      name={`Mortality - Zone ${selectedZone}`}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
             </div>
           </div>
         </div>
@@ -2064,9 +2201,7 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* LEFT */}
           <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-semibold text-lg mb-3">
-              Broiler Weight 
-            </h3>
+            <h3 className="font-semibold text-lg mb-3">Broiler Weight</h3>
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
