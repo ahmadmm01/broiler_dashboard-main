@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import { standardBroilerWeight } from "./lib/broilerStandard";
 import { useEffect, useMemo, useState } from "react";
@@ -42,7 +43,8 @@ type MortalityEntry = {
 };
 
 type ConsumptionEntry = {
-  day: number;
+  zone: "A" | "B" | "C";
+  date: string;
   feedKg: number;
   waterL: number;
 };
@@ -466,13 +468,27 @@ PM2.5 ≤ 35 µg/m³
 
   // Consumption
   const [consumptions, setConsumptions] = useState<ConsumptionEntry[]>([
-    { day: 1, feedKg: 0.06, waterL: 0.13 },
-    { day: 2, feedKg: 0.07, waterL: 0.15 },
-    { day: 3, feedKg: 0.08, waterL: 0.18 },
-    { day: 4, feedKg: 0.1, waterL: 0.21 },
-    { day: 5, feedKg: 0.12, waterL: 0.25 },
+    { zone: "A", date: "2025-07-01", feedKg: 0.06, waterL: 0.13 },
+    { zone: "B", date: "2025-07-01", feedKg: 0.061, waterL: 0.131 },
+    { zone: "C", date: "2025-07-01", feedKg: 0.059, waterL: 0.129 },
+
+    { zone: "A", date: "2025-07-02", feedKg: 0.07, waterL: 0.15 },
+    { zone: "B", date: "2025-07-02", feedKg: 0.071, waterL: 0.152 },
+    { zone: "C", date: "2025-07-02", feedKg: 0.069, waterL: 0.148 },
+
+    { zone: "A", date: "2025-07-03", feedKg: 0.08, waterL: 0.18 },
+    { zone: "B", date: "2025-07-03", feedKg: 0.081, waterL: 0.182 },
+    { zone: "C", date: "2025-07-03", feedKg: 0.079, waterL: 0.178 },
+
+    { zone: "A", date: "2025-07-04", feedKg: 0.1, waterL: 0.21 },
+    { zone: "B", date: "2025-07-04", feedKg: 0.102, waterL: 0.212 },
+    { zone: "C", date: "2025-07-04", feedKg: 0.098, waterL: 0.208 },
+
+    { zone: "A", date: "2025-07-05", feedKg: 0.12, waterL: 0.25 },
+    { zone: "B", date: "2025-07-05", feedKg: 0.121, waterL: 0.252 },
+    { zone: "C", date: "2025-07-05", feedKg: 0.119, waterL: 0.248 },
   ]);
-  const [dayInput, setDayInput] = useState<number>(consumptions.length + 1);
+  const [consumpDate, setConsumpDate] = useState<string>("2025-07-06");
   const [feedInput, setFeedInput] = useState<number>(0.1);
   const [waterInput, setWaterInput] = useState<number>(0.22);
 
@@ -972,18 +988,88 @@ PM2.5 ≤ 35 µg/m³
     return applyAgg(allZoneCombinedData);
   }, [allZoneCombinedData, appliedAggregation]);
 
+  const visibleConsumptions = useMemo(() => {
+    if (selectedZone === "ALL") return consumptions;
+    return consumptions.filter((c) => c.zone === selectedZone);
+  }, [consumptions, selectedZone]);
+
   const consumptionChartData = useMemo(() => {
-    const days = [...consumptions]
-      .sort((a, b) => a.day - b.day)
-      .map((c) => ({
-        day: c.day,
-        feedKg: c.feedKg,
-        waterL: c.waterL,
-        stdFeedKg: standardFeedKg(c.day),
-        stdWaterL: standardWaterL(c.day),
-      }));
-    return days;
-  }, [consumptions]);
+    if (isAllZone) {
+      // ALL ZONE: show all zones
+      const map = new Map<string, { date: string; A: number; B: number; C: number; stdA: number; stdB: number; stdC: number }>();
+      
+      consumptions.forEach((c) => {
+        if (!map.has(c.date)) {
+          const dayNum = Math.ceil((new Date(c.date).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          map.set(c.date, {
+            date: c.date,
+            A: 0,
+            B: 0,
+            C: 0,
+            stdA: standardFeedKg(dayNum),
+            stdB: standardFeedKg(dayNum),
+            stdC: standardFeedKg(dayNum),
+          });
+        }
+        const row = map.get(c.date)!;
+        if (c.zone === "A") row.A = c.feedKg;
+        if (c.zone === "B") row.B = c.feedKg;
+        if (c.zone === "C") row.C = c.feedKg;
+      });
+
+      return Array.from(map.values()).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    } else {
+      // SINGLE ZONE: show only selected zone
+      const dayNum = (dateStr: string) => Math.ceil((new Date(dateStr).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      
+      return visibleConsumptions
+        .map((c) => ({
+          date: c.date,
+          feedKg: c.feedKg,
+          stdFeedKg: standardFeedKg(dayNum(c.date)),
+        }))
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    }
+  }, [consumptions, visibleConsumptions, isAllZone]);
+
+  const consumptionWaterChartData = useMemo(() => {
+    if (isAllZone) {
+      // ALL ZONE: show all zones
+      const map = new Map<string, { date: string; A: number; B: number; C: number; stdA: number; stdB: number; stdC: number }>();
+      
+      consumptions.forEach((c) => {
+        if (!map.has(c.date)) {
+          const dayNum = Math.ceil((new Date(c.date).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          map.set(c.date, {
+            date: c.date,
+            A: 0,
+            B: 0,
+            C: 0,
+            stdA: standardWaterL(dayNum),
+            stdB: standardWaterL(dayNum),
+            stdC: standardWaterL(dayNum),
+          });
+        }
+        const row = map.get(c.date)!;
+        if (c.zone === "A") row.A = c.waterL;
+        if (c.zone === "B") row.B = c.waterL;
+        if (c.zone === "C") row.C = c.waterL;
+      });
+
+      return Array.from(map.values()).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    } else {
+      // SINGLE ZONE: show only selected zone
+      const dayNum = (dateStr: string) => Math.ceil((new Date(dateStr).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      
+      return visibleConsumptions
+        .map((c) => ({
+          date: c.date,
+          waterL: c.waterL,
+          stdWaterL: standardWaterL(dayNum(c.date)),
+        }))
+        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    }
+  }, [consumptions, visibleConsumptions, isAllZone]);
 
   function summarizeData(data: DataPoint[]) {
     if (data.length === 0) return null;
@@ -1034,19 +1120,30 @@ PM2.5 ≤ 35 µg/m³
   }, [mortality, selectedZone]);
 
   const addConsumption = () => {
-    if (dayInput <= 0) return;
+    if (!consumpDate || isAllZone) return;
     setConsumptions((prev) => {
-      const exists = prev.some((p) => p.day === dayInput);
+      const exists = prev.some(
+        (p) => p.date === consumpDate && p.zone === selectedZone
+      );
       const next = exists
         ? prev.map((p) =>
-            p.day === dayInput
+            p.date === consumpDate && p.zone === selectedZone
               ? { ...p, feedKg: feedInput, waterL: waterInput }
               : p
           )
-        : [...prev, { day: dayInput, feedKg: feedInput, waterL: waterInput }];
+        : [
+            ...prev,
+            {
+              zone: selectedZone as "A" | "B" | "C",
+              date: consumpDate,
+              feedKg: feedInput,
+              waterL: waterInput,
+            },
+          ];
       return next;
     });
-    setDayInput((d) => d + 1);
+    setFeedInput(0.1);
+    setWaterInput(0.22);
   };
 
   return (
@@ -2060,101 +2157,194 @@ PM2.5 ≤ 35 µg/m³
 
         {/* Row: Feed & Water Consumption */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-          {/* Form */}
+          {/* Form & Table */}
           <div className="bg-white rounded-2xl shadow p-4">
             <h3 className="font-semibold text-lg mb-3">
-              Feed & Water Consumption
+              Feed & Water Consumption {!isAllZone && `- Zone ${selectedZone}`}
             </h3>
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="text-sm text-gray-600">Day</label>
-                <input
-                  type="number"
-                  min={1}
-                  className="w-full border rounded-lg px-3 py-2"
-                  value={dayInput}
-                  onChange={(e) => setDayInput(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="text-sm text-gray-600">Feed (kg)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="w-full border rounded-lg px-3 py-2"
-                  value={feedInput}
-                  onChange={(e) => setFeedInput(Number(e.target.value))}
-                />
-              </div>
-              <div>
-                <label className="text-sm text-gray-600">Water (L)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="w-full border rounded-lg px-3 py-2"
-                  value={waterInput}
-                  onChange={(e) => setWaterInput(Number(e.target.value))}
-                />
-              </div>
-            </div>
-            <button
-              onClick={addConsumption}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
-            >
-              Save Entry
-            </button>
 
-            <div className="mt-4 max-h-40 overflow-auto border rounded-lg">
+            {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
+            {!isAllZone && (
+              <div className="flex flex-col gap-3 mb-4">
+                <div>
+                  <label className="text-sm text-gray-600">Date</label>
+                  <input
+                    type="date"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={consumpDate}
+                    onChange={(e) => setConsumpDate(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Feed (kg)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={feedInput}
+                    onChange={(e) => setFeedInput(Number(e.target.value))}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">Water (L)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={waterInput}
+                    onChange={(e) => setWaterInput(Number(e.target.value))}
+                  />
+                </div>
+
+                <button
+                  onClick={addConsumption}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                >
+                  Add
+                </button>
+              </div>
+            )}
+
+            {/* ================= TABLE ================= */}
+            <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-gray-500">
-                    <th className="py-2 px-2">Day</th>
-                    <th className="py-2 px-2">Feed (kg)</th>
-                    <th className="py-2 px-2">Water (L)</th>
-                  </tr>
+                  {isAllZone ? (
+                    <tr className="text-left text-gray-500">
+                      <th className="py-2 px-2">Date</th>
+                      <th className="py-2 px-2">Zone</th>
+                      <th className="py-2 px-2">Feed (kg)</th>
+                      <th className="py-2 px-2">Water (L)</th>
+                    </tr>
+                  ) : (
+                    <tr className="text-left text-gray-500">
+                      <th className="py-2 px-2">Date</th>
+                      <th className="py-2 px-2">Feed (kg)</th>
+                      <th className="py-2 px-2">Water (L)</th>
+                    </tr>
+                  )}
                 </thead>
-                <tbody>
-                  {[...consumptions]
-                    .sort((a, b) => a.day - b.day)
-                    .map((c) => (
-                      <tr key={c.day} className="border-t">
-                        <td className="py-1 px-2">{c.day}</td>
-                        <td className="py-1 px-2">{c.feedKg}</td>
-                        <td className="py-1 px-2">{c.waterL}</td>
+
+                {/* ===== ALL ZONE BODY ===== */}
+                {isAllZone && (
+                  <tbody>
+                    {consumptions.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="py-3 text-gray-400">
+                          No records yet.
+                        </td>
                       </tr>
-                    ))}
-                </tbody>
+                    ) : (
+                      [...consumptions]
+                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                        .map((c, i) => (
+                          <tr key={`${c.date}-${c.zone}-${i}`} className="border-t">
+                            <td className="py-2 px-2">{c.date}</td>
+                            <td className="py-2 px-2">{c.zone}</td>
+                            <td className="py-2 px-2">{c.feedKg}</td>
+                            <td className="py-2 px-2">{c.waterL}</td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                )}
+
+                {/* ===== SINGLE ZONE BODY ===== */}
+                {!isAllZone && (
+                  <tbody>
+                    {visibleConsumptions.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="py-3 text-gray-400">
+                          No records yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      [...visibleConsumptions]
+                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                        .map((c, i) => (
+                          <tr key={`${c.date}-${i}`} className="border-t">
+                            <td className="py-2 px-2">{c.date}</td>
+                            <td className="py-2 px-2">{c.feedKg}</td>
+                            <td className="py-2 px-2">{c.waterL}</td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                )}
               </table>
             </div>
           </div>
 
           {/* Chart: Feed */}
           <div className="bg-white rounded-2xl shadow p-4 col-span-1">
-            <h3 className="font-semibold mb-2">Daily Feed Trend vs Standard</h3>
+            <h3 className="font-semibold mb-2">
+              Daily Feed Trend {!isAllZone && `- Zone ${selectedZone}`}
+            </h3>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={consumptionChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="day" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="feedKg"
-                    name="Feed (kg)"
-                    stroke="#10b981"
-                    dot={{ r: 3 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="stdFeedKg"
-                    name="Std Feed (kg)"
-                    stroke="#ef4444"
-                    dot={false}
-                    strokeDasharray="4 4"
-                  />
-                </LineChart>
+                {isAllZone ? (
+                  <LineChart data={consumptionChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="A"
+                      name="Feed Zone A (kg)"
+                      stroke={ZONE_COLORS.A}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="B"
+                      name="Feed Zone B (kg)"
+                      stroke={ZONE_COLORS.B}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="C"
+                      name="Feed Zone C (kg)"
+                      stroke={ZONE_COLORS.C}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="stdA"
+                      name="Std Feed (kg)"
+                      stroke="#ef4444"
+                      dot={false}
+                      strokeDasharray="4 4"
+                    />
+                  </LineChart>
+                ) : (
+                  <LineChart data={consumptionChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="feedKg"
+                      stroke={ZONE_COLORS[selectedZone]}
+                      dot={{ r: 4 }}
+                      name={`Feed Zone ${selectedZone} (kg)`}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="stdFeedKg"
+                      name="Std Feed (kg)"
+                      stroke="#ef4444"
+                      dot={false}
+                      strokeDasharray="4 4"
+                    />
+                  </LineChart>
+                )}
               </ResponsiveContainer>
             </div>
           </div>
@@ -2162,32 +2352,71 @@ PM2.5 ≤ 35 µg/m³
           {/* Chart: Water */}
           <div className="bg-white rounded-2xl shadow p-4 col-span-1">
             <h3 className="font-semibold mb-2">
-              Daily Water Trend vs Standard
+              Daily Water Trend {!isAllZone && `- Zone ${selectedZone}`}
             </h3>
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={consumptionChartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="day" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Line
-                    type="monotone"
-                    dataKey="waterL"
-                    name="Water (L)"
-                    stroke="#3b82f6"
-                    dot={{ r: 3 }}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="stdWaterL"
-                    name="Std Water (L)"
-                    stroke="#ef4444"
-                    dot={false}
-                    strokeDasharray="4 4"
-                  />
-                </LineChart>
+                {isAllZone ? (
+                  <LineChart data={consumptionWaterChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="A"
+                      name="Water Zone A (L)"
+                      stroke={ZONE_COLORS.A}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="B"
+                      name="Water Zone B (L)"
+                      stroke={ZONE_COLORS.B}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="C"
+                      name="Water Zone C (L)"
+                      stroke={ZONE_COLORS.C}
+                      dot={{ r: 3 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="stdA"
+                      name="Std Water (L)"
+                      stroke="#ef4444"
+                      dot={false}
+                      strokeDasharray="4 4"
+                    />
+                  </LineChart>
+                ) : (
+                  <LineChart data={consumptionWaterChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="waterL"
+                      stroke={ZONE_COLORS[selectedZone]}
+                      dot={{ r: 4 }}
+                      name={`Water Zone ${selectedZone} (L)`}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="stdWaterL"
+                      name="Std Water (L)"
+                      stroke="#ef4444"
+                      dot={false}
+                      strokeDasharray="4 4"
+                    />
+                  </LineChart>
+                )}
               </ResponsiveContainer>
             </div>
           </div>
