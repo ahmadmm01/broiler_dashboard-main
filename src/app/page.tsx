@@ -674,7 +674,7 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
 
     const interval = setInterval(() => {
       setLiveIndex((prev) => (prev < allData.length - 1 ? prev + 1 : 0));
-    }, 2000); // ganti tiap 2 detik
+    }, 10000); // ganti tiap 10 detik
 
     return () => clearInterval(interval);
   }, [allData]);
@@ -1074,22 +1074,61 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
 
       {/* CCTV Section */}
       <section>
-        <h2 className="text-2xl font-semibold mb-4">
-          CCTV{" "}
-          {selectedZone === "ALL" ? "– All Zones" : `– Zone ${selectedZone}`}
-        </h2>
+        <h2 className="text-2xl font-semibold mb-4">CCTV Monitoring</h2>
 
-        <div className="rounded-2xl overflow-hidden shadow-lg relative">
-          <video
-            // src="/video/broiler_video.mp4"
-            src="/video/cctv ayam 1_tracked-stay.mp4"
-            autoPlay
-            loop
-            muted
-            playsInline
-            className="w-full object-cover"
-          />
-        </div>
+        {/* Show single zone CCTV when zone is selected */}
+        {selectedZone !== "ALL" && (
+          <div className="rounded-2xl overflow-hidden shadow-lg relative">
+            <div className="relative">
+              <video
+                src={
+                  selectedZone === "A"
+                    ? "/video/cctv ayam 1_tracked-stay.mp4"
+                    : selectedZone === "B"
+                    ? "/video/cctv ayam 1_tracked-stay.mp4"
+                    : "/video/cctv ayam 1_tracked-stay.mp4"
+                }
+                autoPlay
+                loop
+                muted
+                playsInline
+                className="w-full object-cover"
+              />
+              <div className="absolute top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-lg text-sm font-medium">
+                Zone {selectedZone}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Show all zones CCTV when ALL is selected */}
+        {selectedZone === "ALL" && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {(["A", "B", "C"] as const).map((zone) => (
+              <div key={zone} className="rounded-2xl overflow-hidden shadow-lg relative">
+                <div className="relative">
+                  <video
+                    src={
+                      zone === "A"
+                        ? "/video/cctv ayam 1_tracked-stay.mp4"
+                        : zone === "B"
+                        ? "/video/cctv ayam 1_tracked-stay.mp4"
+                        : "/video/cctv ayam 1_tracked-stay.mp4"
+                    }
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    className="w-full object-cover"
+                  />
+                  <div className="absolute top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-lg text-sm font-medium">
+                    Zone {zone}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Live Readings */}
@@ -1841,7 +1880,7 @@ const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
                 className="absolute inset-0 pointer-events-none opacity-40"
                 style={{
                   background:
-                    "radial-gradient(circle at 30% 40%, #ffa500, transparent 40%), radial-gradient(circle at 70% 60%, #ff0000, transparent 35%), radial-gradient(circle at 50% 30%, #ffff00, transparent 30%)",
+                    "radial-gradient(circle at 30% 40%, #ff0000, transparent 40%), radial-gradient(circle at 70% 60%, #ffbb00, transparent 35%), radial-gradient(circle at 50% 30%, #ffff00d7, transparent 30%)",
                 }}
               />
               <div className="absolute bottom-2 right-2 bg-white/80 backdrop-blur px-3 py-1 rounded-lg text-xs">
