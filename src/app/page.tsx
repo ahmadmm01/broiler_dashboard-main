@@ -1998,124 +1998,126 @@ PM2.5 ≤ 35 µg/m³
         )}
 
         {/* Row: Mortality */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+        <div className={`grid gap-6 mb-6 ${isAllZone ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-3"}`}>
           {/* Mortality Logging - Table */}
-          <div className="lg:col-span-1 bg-white rounded-2xl shadow p-4">
-            <h3 className="font-semibold text-lg mb-3">
-              Mortality Detection / Logging
-            </h3>
+          {!isAllZone && (
+            <div className="lg:col-span-1 bg-white rounded-2xl shadow p-4">
+              <h3 className="font-semibold text-lg mb-3">
+                Mortality Detection / Logging
+              </h3>
 
-            {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
-            {!isAllZone && (
-              <div className="flex flex-col gap-3 mb-4">
-                <div>
-                  <label className="text-sm text-gray-600">Date</label>
-                  <input
-                    type="date"
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={mortDate}
-                    onChange={(e) => setMortDate(e.target.value)}
-                  />
+              {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
+              {!isAllZone && (
+                <div className="flex flex-col gap-3 mb-4">
+                  <div>
+                    <label className="text-sm text-gray-600">Date</label>
+                    <input
+                      type="date"
+                      className="w-full border rounded-lg px-3 py-2"
+                      value={mortDate}
+                      onChange={(e) => setMortDate(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-600">Count</label>
+                    <input
+                      type="number"
+                      className="w-full border rounded-lg px-3 py-2"
+                      min={0}
+                      value={mortCount}
+                      onChange={(e) => setMortCount(Number(e.target.value))}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-600">Notes</label>
+                    <input
+                      className="w-full border rounded-lg px-3 py-2"
+                      placeholder="optional"
+                      value={mortNotes}
+                      onChange={(e) => setMortNotes(e.target.value)}
+                    />
+                  </div>
+
+                  <button
+                    onClick={addMortality}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                  >
+                    Add
+                  </button>
                 </div>
+              )}
 
-                <div>
-                  <label className="text-sm text-gray-600">Count</label>
-                  <input
-                    type="number"
-                    className="w-full border rounded-lg px-3 py-2"
-                    min={0}
-                    value={mortCount}
-                    onChange={(e) => setMortCount(Number(e.target.value))}
-                  />
-                </div>
+              {/* ================= TABLE ================= */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    {isAllZone ? (
+                      <tr className="text-left text-gray-500">
+                        <th className="py-2">Date</th>
+                        <th className="py-2 text-center">Zone A</th>
+                        <th className="py-2 text-center">Zone B</th>
+                        <th className="py-2 text-center">Zone C</th>
+                      </tr>
+                    ) : (
+                      <tr className="text-left text-gray-500">
+                        <th className="py-2">Date</th>
+                        <th className="py-2">Count</th>
+                        <th className="py-2">Notes</th>
+                      </tr>
+                    )}
+                  </thead>
 
-                <div>
-                  <label className="text-sm text-gray-600">Notes</label>
-                  <input
-                    className="w-full border rounded-lg px-3 py-2"
-                    placeholder="optional"
-                    value={mortNotes}
-                    onChange={(e) => setMortNotes(e.target.value)}
-                  />
-                </div>
-
-                <button
-                  onClick={addMortality}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg"
-                >
-                  Add
-                </button>
-              </div>
-            )}
-
-            {/* ================= TABLE ================= */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  {isAllZone ? (
-                    <tr className="text-left text-gray-500">
-                      <th className="py-2">Date</th>
-                      <th className="py-2 text-center">Zone A</th>
-                      <th className="py-2 text-center">Zone B</th>
-                      <th className="py-2 text-center">Zone C</th>
-                    </tr>
-                  ) : (
-                    <tr className="text-left text-gray-500">
-                      <th className="py-2">Date</th>
-                      <th className="py-2">Count</th>
-                      <th className="py-2">Notes</th>
-                    </tr>
+                  {/* ===== ALL ZONE BODY ===== */}
+                  {isAllZone && (
+                    <tbody>
+                      {mortalitySummaryByDate.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="py-3 text-gray-400">
+                            No records yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        mortalitySummaryByDate.map((row) => (
+                          <tr key={row.date} className="border-t">
+                            <td className="py-2">{row.date}</td>
+                            <td className="py-2 text-center">{row.A}</td>
+                            <td className="py-2 text-center">{row.B}</td>
+                            <td className="py-2 text-center">{row.C}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
                   )}
-                </thead>
 
-                {/* ===== ALL ZONE BODY ===== */}
-                {isAllZone && (
-                  <tbody>
-                    {mortalitySummaryByDate.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-3 text-gray-400">
-                          No records yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      mortalitySummaryByDate.map((row) => (
-                        <tr key={row.date} className="border-t">
-                          <td className="py-2">{row.date}</td>
-                          <td className="py-2 text-center">{row.A}</td>
-                          <td className="py-2 text-center">{row.B}</td>
-                          <td className="py-2 text-center">{row.C}</td>
+                  {/* ===== SINGLE ZONE BODY ===== */}
+                  {!isAllZone && (
+                    <tbody>
+                      {visibleMortality.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} className="py-3 text-gray-400">
+                            No records yet.
+                          </td>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                )}
-
-                {/* ===== SINGLE ZONE BODY ===== */}
-                {!isAllZone && (
-                  <tbody>
-                    {visibleMortality.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} className="py-3 text-gray-400">
-                          No records yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      visibleMortality.map((m, i) => (
-                        <tr key={`${m.date}-${i}`} className="border-t">
-                          <td className="py-2">{m.date}</td>
-                          <td className="py-2">{m.count}</td>
-                          <td className="py-2">{m.notes ?? "-"}</td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                )}
-              </table>
+                      ) : (
+                        visibleMortality.map((m, i) => (
+                          <tr key={`${m.date}-${i}`} className="border-t">
+                            <td className="py-2">{m.date}</td>
+                            <td className="py-2">{m.count}</td>
+                            <td className="py-2">{m.notes ?? "-"}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  )}
+                </table>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Mortality Chart */}
-          <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4">
+          <div className={`${isAllZone ? "lg:col-span-1" : "lg:col-span-2"} bg-white rounded-2xl shadow p-4`}>
             <h3 className="font-semibold text-lg mb-3">
               Mortality Trend {!isAllZone && `- Zone ${selectedZone}`}
             </h3>
@@ -2156,129 +2158,131 @@ PM2.5 ≤ 35 µg/m³
         </div>
 
         {/* Row: Feed & Water Consumption */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
+        <div className={`grid gap-6 mt-6 ${isAllZone ? "grid-cols-2" : "grid-cols-1 lg:grid-cols-3"}`}>
           {/* Form & Table */}
-          <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-semibold text-lg mb-3">
-              Feed & Water Consumption {!isAllZone && `- Zone ${selectedZone}`}
-            </h3>
+          {!isAllZone && (
+            <div className="bg-white rounded-2xl shadow p-4">
+              <h3 className="font-semibold text-lg mb-3">
+                Feed & Water Consumption {!isAllZone && `- Zone ${selectedZone}`}
+              </h3>
 
-            {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
-            {!isAllZone && (
-              <div className="flex flex-col gap-3 mb-4">
-                <div>
-                  <label className="text-sm text-gray-600">Date</label>
-                  <input
-                    type="date"
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={consumpDate}
-                    onChange={(e) => setConsumpDate(e.target.value)}
-                  />
+              {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
+              {!isAllZone && (
+                <div className="flex flex-col gap-3 mb-4">
+                  <div>
+                    <label className="text-sm text-gray-600">Date</label>
+                    <input
+                      type="date"
+                      className="w-full border rounded-lg px-3 py-2"
+                      value={consumpDate}
+                      onChange={(e) => setConsumpDate(e.target.value)}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-600">Feed (kg)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="w-full border rounded-lg px-3 py-2"
+                      value={feedInput}
+                      onChange={(e) => setFeedInput(Number(e.target.value))}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-sm text-gray-600">Water (L)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="w-full border rounded-lg px-3 py-2"
+                      value={waterInput}
+                      onChange={(e) => setWaterInput(Number(e.target.value))}
+                    />
+                  </div>
+
+                  <button
+                    onClick={addConsumption}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                  >
+                    Add
+                  </button>
                 </div>
+              )}
 
-                <div>
-                  <label className="text-sm text-gray-600">Feed (kg)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={feedInput}
-                    onChange={(e) => setFeedInput(Number(e.target.value))}
-                  />
-                </div>
+              {/* ================= TABLE ================= */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    {isAllZone ? (
+                      <tr className="text-left text-gray-500">
+                        <th className="py-2 px-2">Date</th>
+                        <th className="py-2 px-2">Zone</th>
+                        <th className="py-2 px-2">Feed (kg)</th>
+                        <th className="py-2 px-2">Water (L)</th>
+                      </tr>
+                    ) : (
+                      <tr className="text-left text-gray-500">
+                        <th className="py-2 px-2">Date</th>
+                        <th className="py-2 px-2">Feed (kg)</th>
+                        <th className="py-2 px-2">Water (L)</th>
+                      </tr>
+                    )}
+                  </thead>
 
-                <div>
-                  <label className="text-sm text-gray-600">Water (L)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={waterInput}
-                    onChange={(e) => setWaterInput(Number(e.target.value))}
-                  />
-                </div>
-
-                <button
-                  onClick={addConsumption}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg"
-                >
-                  Add
-                </button>
-              </div>
-            )}
-
-            {/* ================= TABLE ================= */}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  {isAllZone ? (
-                    <tr className="text-left text-gray-500">
-                      <th className="py-2 px-2">Date</th>
-                      <th className="py-2 px-2">Zone</th>
-                      <th className="py-2 px-2">Feed (kg)</th>
-                      <th className="py-2 px-2">Water (L)</th>
-                    </tr>
-                  ) : (
-                    <tr className="text-left text-gray-500">
-                      <th className="py-2 px-2">Date</th>
-                      <th className="py-2 px-2">Feed (kg)</th>
-                      <th className="py-2 px-2">Water (L)</th>
-                    </tr>
+                  {/* ===== ALL ZONE BODY ===== */}
+                  {isAllZone && (
+                    <tbody>
+                      {consumptions.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="py-3 text-gray-400">
+                            No records yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        [...consumptions]
+                          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                          .map((c, i) => (
+                            <tr key={`${c.date}-${c.zone}-${i}`} className="border-t">
+                              <td className="py-2 px-2">{c.date}</td>
+                              <td className="py-2 px-2">{c.zone}</td>
+                              <td className="py-2 px-2">{c.feedKg}</td>
+                              <td className="py-2 px-2">{c.waterL}</td>
+                            </tr>
+                          ))
+                      )}
+                    </tbody>
                   )}
-                </thead>
 
-                {/* ===== ALL ZONE BODY ===== */}
-                {isAllZone && (
-                  <tbody>
-                    {consumptions.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-3 text-gray-400">
-                          No records yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      [...consumptions]
-                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                        .map((c, i) => (
-                          <tr key={`${c.date}-${c.zone}-${i}`} className="border-t">
-                            <td className="py-2 px-2">{c.date}</td>
-                            <td className="py-2 px-2">{c.zone}</td>
-                            <td className="py-2 px-2">{c.feedKg}</td>
-                            <td className="py-2 px-2">{c.waterL}</td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                )}
-
-                {/* ===== SINGLE ZONE BODY ===== */}
-                {!isAllZone && (
-                  <tbody>
-                    {visibleConsumptions.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} className="py-3 text-gray-400">
-                          No records yet.
-                        </td>
-                      </tr>
-                    ) : (
-                      [...visibleConsumptions]
-                        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                        .map((c, i) => (
-                          <tr key={`${c.date}-${i}`} className="border-t">
-                            <td className="py-2 px-2">{c.date}</td>
-                            <td className="py-2 px-2">{c.feedKg}</td>
-                            <td className="py-2 px-2">{c.waterL}</td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                )}
-              </table>
+                  {/* ===== SINGLE ZONE BODY ===== */}
+                  {!isAllZone && (
+                    <tbody>
+                      {visibleConsumptions.length === 0 ? (
+                        <tr>
+                          <td colSpan={3} className="py-3 text-gray-400">
+                            No records yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        [...visibleConsumptions]
+                          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                          .map((c, i) => (
+                            <tr key={`${c.date}-${i}`} className="border-t">
+                              <td className="py-2 px-2">{c.date}</td>
+                              <td className="py-2 px-2">{c.feedKg}</td>
+                              <td className="py-2 px-2">{c.waterL}</td>
+                            </tr>
+                          ))
+                      )}
+                    </tbody>
+                  )}
+                </table>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Chart: Feed */}
-          <div className="bg-white rounded-2xl shadow p-4 col-span-1">
+          <div className={`bg-white rounded-2xl shadow p-4 ${isAllZone ? "col-span-1" : "col-span-1"}`}>
             <h3 className="font-semibold mb-2">
               Daily Feed Trend {!isAllZone && `- Zone ${selectedZone}`}
             </h3>
