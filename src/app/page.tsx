@@ -30,6 +30,7 @@ type DataPoint = {
 };
 
 type WeightEntry = {
+  zone: "A" | "B" | "C";
   day: number;
   stdWeightKg: number;
   actualWeightKg: number;
@@ -282,20 +283,27 @@ export default function DashboardPage() {
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
   const [weights, setWeights] = useState<WeightEntry[]>(() => {
-    // Generate dummy weight data for days 1-30
+    // Generate dummy weight data for days 1-30 for each zone
     const dummyWeights: WeightEntry[] = [];
-    for (let day = 1; day <= 30; day++) {
-      const stdWeight = standardBroilerWeight(day);
-      // Add realistic variation: ±3% from standard
-      const variance = (Math.random() - 0.5) * 0.06;
-      const actualWeight = +(stdWeight * (1 + variance)).toFixed(3);
-      
-      dummyWeights.push({
-        day,
-        stdWeightKg: stdWeight,
-        actualWeightKg: actualWeight,
-      });
-    }
+    const zones: ("A" | "B" | "C")[] = ["A", "B", "C"];
+    
+    zones.forEach((zone) => {
+      for (let day = 1; day <= 30; day++) {
+        const stdWeight = standardBroilerWeight(day);
+        // Add zone-specific variation
+        let variance = (Math.random() - 0.5) * 0.06;
+        if (zone === "B") variance += 0.01; // Zone B sedikit lebih berat
+        if (zone === "C") variance -= 0.01; // Zone C sedikit lebih ringan
+        const actualWeight = +(stdWeight * (1 + variance)).toFixed(3);
+        
+        dummyWeights.push({
+          zone,
+          day,
+          stdWeightKg: stdWeight,
+          actualWeightKg: actualWeight,
+        });
+      }
+    });
     return dummyWeights;
   });
   const [weightDay, setWeightDay] = useState<number>(31);
@@ -509,27 +517,30 @@ PM2.5 ≤ 35 µg/m³
   const [waterInput, setWaterInput] = useState<number>(0.22);
 
   const addWeightEntry = () => {
-    if (weightDay <= 0 || actualWeight <= 0) return;
+    if (weightDay <= 0 || actualWeight <= 0 || isAllZone) return;
 
     const stdWeight = standardBroilerWeight(weightDay);
 
     setWeights((prev) => {
-      const exists = prev.some((w) => w.day === weightDay);
+      const exists = prev.some((w) => w.day === weightDay && w.zone === selectedZone);
 
       const next = exists
         ? prev.map((w) =>
-            w.day === weightDay ? { ...w, actualWeightKg: actualWeight } : w
+            w.day === weightDay && w.zone === selectedZone
+              ? { ...w, actualWeightKg: actualWeight }
+              : w
           )
         : [
             ...prev,
             {
+              zone: selectedZone as "A" | "B" | "C",
               day: weightDay,
               stdWeightKg: stdWeight,
               actualWeightKg: actualWeight,
             },
           ];
 
-      return next.sort((a, b) => a.day - b.day);
+      return next.sort((a, b) => a.day - b.day || a.zone.localeCompare(b.zone));
     });
 
     setWeightDay((d) => d + 1);
@@ -1161,6 +1172,48 @@ PM2.5 ≤ 35 µg/m³
     setFeedInput(0.1);
     setWaterInput(0.22);
   };
+
+  const visibleWeights = useMemo(() => {
+    if (selectedZone === "ALL") return weights;
+    return weights.filter((w) => w.zone === selectedZone);
+  }, [weights, selectedZone]);
+
+  const weightChartData = useMemo(() => {
+    if (isAllZone) {
+      // ALL ZONES: show all zones
+      const map = new Map<number, { day: number; A: number | null; B: number | null; C: number | null; stdA: number; stdB: number; stdC: number }>();
+      
+      weights.forEach((w) => {
+        if (!map.has(w.day)) {
+          const stdWeight = standardBroilerWeight(w.day);
+          map.set(w.day, {
+            day: w.day,
+            A: null,
+            B: null,
+            C: null,
+            stdA: stdWeight,
+            stdB: stdWeight,
+            stdC: stdWeight,
+          });
+        }
+        const row = map.get(w.day)!;
+        if (w.zone === "A") row.A = w.actualWeightKg;
+        if (w.zone === "B") row.B = w.actualWeightKg;
+        if (w.zone === "C") row.C = w.actualWeightKg;
+      });
+
+      return Array.from(map.values()).sort((a, b) => a.day - b.day);
+    } else {
+      // SINGLE ZONE: show only selected zone with actual and standard
+      return visibleWeights
+        .map((w) => ({
+          day: w.day,
+          actualWeightKg: w.actualWeightKg,
+          stdWeightKg: w.stdWeightKg,
+        }))
+        .sort((a, b) => a.day - b.day);
+    }
+  }, [weights, visibleWeights, isAllZone]);
 
   return (
     <div className="space-y-8 p-6 max-w-7xl mx-auto">
@@ -2447,128 +2500,173 @@ PM2.5 ≤ 35 µg/m³
           Broiler Body Weight Monitoring
         </h2>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* LEFT */}
-          <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-semibold text-lg mb-3">Broiler Weight</h3>
+        <div className={`grid gap-6 ${isAllZone ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-3"}`}>
+          {/* LEFT - Form & Table (ONLY SINGLE ZONE) */}
+          {!isAllZone && (
+            <div className="bg-white rounded-2xl shadow p-4">
+              <h3 className="font-semibold text-lg mb-3">
+                Broiler Weight - Zone {selectedZone}
+              </h3>
 
-            <div className="grid grid-cols-2 gap-3 mb-3">
-              <div>
-                <label className="text-sm text-gray-600">Day</label>
-                <input
-                  type="number"
-                  min={1}
-                  className="w-full border rounded-lg px-3 py-2"
-                  value={weightDay}
-                  onChange={(e) => setWeightDay(Number(e.target.value))}
-                />
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-sm text-gray-600">Day</label>
+                  <input
+                    type="number"
+                    min={1}
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={weightDay}
+                    onChange={(e) => setWeightDay(Number(e.target.value))}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm text-gray-600">
+                    Actual Weight (kg)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    className="w-full border rounded-lg px-3 py-2"
+                    value={actualWeight}
+                    onChange={(e) => setActualWeight(Number(e.target.value))}
+                  />
+                </div>
               </div>
 
-              <div>
-                <label className="text-sm text-gray-600">
-                  Actual Weight (kg)
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  className="w-full border rounded-lg px-3 py-2"
-                  value={actualWeight}
-                  onChange={(e) => setActualWeight(Number(e.target.value))}
-                />
-              </div>
-            </div>
+              <button
+                onClick={addWeightEntry}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
+              >
+                Save Entry
+              </button>
 
-            <button
-              onClick={addWeightEntry}
-              className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
-            >
-              Save Entry
-            </button>
-
-            <div className="mt-4 max-h-52 overflow-auto border rounded-lg">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-500">
-                    <th className="py-2 px-2">Day</th>
-                    <th className="py-2 px-2">Std (kg)</th>
-                    <th className="py-2 px-2">Actual (kg)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {weights.length === 0 ? (
-                    <tr>
-                      <td
-                        colSpan={3}
-                        className="py-3 text-gray-400 text-center"
-                      >
-                        No data yet
-                      </td>
+              <div className="mt-4 max-h-52 overflow-auto border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 bg-gray-50">
+                      <th className="py-2 px-2">Day</th>
+                      <th className="py-2 px-2">Std (kg)</th>
+                      <th className="py-2 px-2">Actual (kg)</th>
                     </tr>
-                  ) : (
-                    weights.map((w) => (
-                      <tr key={w.day} className="border-t">
-                        <td className="py-1 px-2">{w.day}</td>
-                        <td className="py-1 px-2">{w.stdWeightKg}</td>
+                  </thead>
+                  <tbody>
+                    {visibleWeights.length === 0 ? (
+                      <tr>
                         <td
-                          className={`py-1 px-2 font-medium ${
-                            w.actualWeightKg < w.stdWeightKg
-                              ? "text-red-600"
-                              : "text-green-700"
-                          }`}
+                          colSpan={3}
+                          className="py-3 text-gray-400 text-center"
                         >
-                          {w.actualWeightKg}
+                          No data yet
                         </td>
                       </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+                    ) : (
+                      visibleWeights.map((w) => (
+                        <tr key={`${w.zone}-${w.day}`} className="border-t">
+                          <td className="py-1 px-2">{w.day}</td>
+                          <td className="py-1 px-2">{w.stdWeightKg}</td>
+                          <td
+                            className={`py-1 px-2 font-medium ${
+                              w.actualWeightKg < w.stdWeightKg
+                                ? "text-red-600"
+                                : "text-green-700"
+                            }`}
+                          >
+                            {w.actualWeightKg}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
+          )}
 
-          {/* RIGHT */}
-          <div className="bg-white rounded-2xl shadow p-4 col-span-2">
+          {/* RIGHT - Chart */}
+          <div className={`bg-white rounded-2xl shadow p-4 ${isAllZone ? "lg:col-span-1" : "lg:col-span-2"}`}>
             <h3 className="font-semibold mb-2">
-              Daily Body Weight vs Standard
+              Daily Body Weight vs Standard {!isAllZone && `- Zone ${selectedZone}`}
             </h3>
 
             <div className="h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={weights}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="day" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-
-                  <Line
-                    type="monotone"
-                    dataKey="actualWeightKg"
-                    name="Actual Weight (kg)"
-                    stroke="#3b82f6"
-                    dot={{ r: 4 }}
-                    isAnimationActive={false}
-                  />
-
-                  <Line
-                    type="monotone"
-                    dataKey="stdWeightKg"
-                    name="Standard Weight (kg)"
-                    stroke="#ef4444"
-                    strokeDasharray="4 4"
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                </LineChart>
+                {isAllZone ? (
+                  <LineChart data={weightChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="day" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="A"
+                      name="Actual Weight Zone A (kg)"
+                      stroke={ZONE_COLORS.A}
+                      dot={{ r: 3 }}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="B"
+                      name="Actual Weight Zone B (kg)"
+                      stroke={ZONE_COLORS.B}
+                      dot={{ r: 3 }}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="C"
+                      name="Actual Weight Zone C (kg)"
+                      stroke={ZONE_COLORS.C}
+                      dot={{ r: 3 }}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="stdA"
+                      name="Standard Weight (kg)"
+                      stroke="#ef4444"
+                      strokeDasharray="4 4"
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                ) : (
+                  <LineChart data={weightChartData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="day" />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="actualWeightKg"
+                      name={`Actual Weight Zone ${selectedZone} (kg)`}
+                      stroke={ZONE_COLORS[selectedZone]}
+                      dot={{ r: 4 }}
+                      isAnimationActive={false}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="stdWeightKg"
+                      name="Standard Weight (kg)"
+                      stroke="#ef4444"
+                      strokeDasharray="4 4"
+                      dot={false}
+                      isAnimationActive={false}
+                    />
+                  </LineChart>
+                )}
               </ResponsiveContainer>
             </div>
 
-            {weights.length > 0 && (
+            {visibleWeights.length > 0 && !isAllZone && (
               <div className="mt-3 text-sm">
-                {weights.at(-1)!.actualWeightKg <
-                weights.at(-1)!.stdWeightKg ? (
+                {visibleWeights.at(-1)!.actualWeightKg <
+                visibleWeights.at(-1)!.stdWeightKg ? (
                   <span className="text-red-600">
-                    ⚠️ Weight below standard on day {weights.at(-1)!.day}
+                    ⚠️ Weight below standard on day {visibleWeights.at(-1)!.day}
                   </span>
                 ) : (
                   <span className="text-green-700">
