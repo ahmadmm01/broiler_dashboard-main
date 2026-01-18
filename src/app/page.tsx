@@ -16,6 +16,8 @@ import {
   BarChart,
   Bar,
 } from "recharts";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 
 // ========= Types =========
 type DataPoint = {
@@ -556,6 +558,9 @@ PM2.5 ≤ 35 µg/m³
     "ALL"
   );
   const isAllZone = selectedZone === "ALL";
+
+  // ===== PDF Report Download =====
+  const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
 
   const [aggregation, setAggregation] = useState<
     "all" | "daily" | "weekly" | "monthly"
@@ -1215,6 +1220,202 @@ PM2.5 ≤ 35 µg/m³
     }
   }, [weights, visibleWeights, isAllZone]);
 
+  // ===== PDF Report Generation =====
+  const generatePDFReport = async () => {
+    try {
+      setIsDownloadingPDF(true);
+
+      // Create a temporary container for report content
+      const reportContainer = document.createElement("div");
+      reportContainer.style.position = "absolute";
+      reportContainer.style.left = "-9999px";
+      reportContainer.style.width = "1000px";
+      reportContainer.style.padding = "40px";
+      reportContainer.style.backgroundColor = "white";
+      reportContainer.style.fontFamily = "Arial, sans-serif";
+
+      // Generate report HTML
+      const reportDate = new Date().toLocaleDateString("id-ID", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
+
+      const selectedZoneLabel =
+        selectedZone === "ALL"
+          ? "All Zones"
+          : `Zone ${selectedZone}`;
+
+      // Get latest data summary
+      const latestData =
+        selectedZone === "ALL"
+          ? data[data.length - 1]
+          : selectedZone === "A"
+            ? zoneData.A[zoneData.A.length - 1]
+            : selectedZone === "B"
+              ? zoneData.B[zoneData.B.length - 1]
+              : zoneData.C[zoneData.C.length - 1];
+
+      const reportHTML = `
+        <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+          <div style="text-align: center; margin-bottom: 30px; border-bottom: 3px solid #1e40af; padding-bottom: 20px;">
+            <h1 style="margin: 0; color: #1e40af; font-size: 28px;">iSENS-COOP Report</h1>
+            <p style="margin: 5px 0; color: #666; font-size: 14px;">Smart Sensing System for Poultry House Monitoring</p>
+            <p style="margin: 10px 0; color: #666; font-size: 12px;">Report Date: ${reportDate}</p>
+          </div>
+
+          <div style="margin-bottom: 30px;">
+            <h2 style="color: #1e40af; font-size: 18px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">Summary</h2>
+            <p><strong>Selected Zone:</strong> ${selectedZoneLabel}</p>
+            <p><strong>Report Generated:</strong> ${new Date().toLocaleString("id-ID")}</p>
+            <p><strong>Data Points:</strong> ${data.length}</p>
+          </div>
+
+          <div style="margin-bottom: 30px;">
+            <h2 style="color: #1e40af; font-size: 18px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">Latest Environmental Readings</h2>
+            ${
+              latestData
+                ? `
+              <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                <tr style="background-color: #f3f4f6;">
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Parameter</th>
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Value</th>
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Status</th>
+                </tr>
+                <tr>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">Temperature</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${latestData.temp.toFixed(2)}°C</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px; ${latestData.temp > 32 ? "color: #dc2626;" : "color: #16a34a;"}">${latestData.temp > 32 ? "⚠️ High" : "✓ Normal"}</td>
+                </tr>
+                <tr style="background-color: #f9fafb;">
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">Humidity</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${latestData.humidity.toFixed(2)}%</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px; ${latestData.humidity > 85 ? "color: #dc2626;" : "color: #16a34a;"}">${latestData.humidity > 85 ? "⚠️ High" : "✓ Normal"}</td>
+                </tr>
+                <tr>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">CO₂ Level</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${latestData.co2.toFixed(0)} ppm</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px; ${latestData.co2 > 1200 ? "color: #dc2626;" : "color: #16a34a;"}">${latestData.co2 > 1200 ? "⚠️ High" : "✓ Normal"}</td>
+                </tr>
+                <tr style="background-color: #f9fafb;">
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">Ammonia (NH₃)</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${latestData.nh3.toFixed(2)} ppm</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px; ${latestData.nh3 > 5 ? "color: #dc2626;" : "color: #16a34a;"}">${latestData.nh3 > 5 ? "⚠️ High" : "✓ Normal"}</td>
+                </tr>
+                <tr>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">PM2.5</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${latestData.pm25.toFixed(2)} µg/m³</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px; ${latestData.pm25 > 35 ? "color: #dc2626;" : "color: #16a34a;"}">${latestData.pm25 > 35 ? "⚠️ High" : "✓ Normal"}</td>
+                </tr>
+              </table>
+            `
+                : "<p style='color: #dc2626;'>No data available</p>"
+            }
+          </div>
+
+          <div style="margin-bottom: 30px;">
+            <h2 style="color: #1e40af; font-size: 18px; border-bottom: 2px solid #e5e7eb; padding-bottom: 10px;">Statistics</h2>
+            ${
+              data.length > 0
+                ? `
+              <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+                <tr style="background-color: #f3f4f6;">
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Parameter</th>
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Average</th>
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Min</th>
+                  <th style="border: 1px solid #d1d5db; padding: 12px; text-align: left;">Max</th>
+                </tr>
+                <tr>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">Temperature (°C)</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${(data.reduce((a, b) => a + b.temp, 0) / data.length).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.min(...data.map((d) => d.temp)).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.max(...data.map((d) => d.temp)).toFixed(2)}</td>
+                </tr>
+                <tr style="background-color: #f9fafb;">
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">Humidity (%)</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${(data.reduce((a, b) => a + b.humidity, 0) / data.length).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.min(...data.map((d) => d.humidity)).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.max(...data.map((d) => d.humidity)).toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">CO₂ (ppm)</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${(data.reduce((a, b) => a + b.co2, 0) / data.length).toFixed(0)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.min(...data.map((d) => d.co2)).toFixed(0)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.max(...data.map((d) => d.co2)).toFixed(0)}</td>
+                </tr>
+                <tr style="background-color: #f9fafb;">
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">Ammonia (ppm)</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${(data.reduce((a, b) => a + b.nh3, 0) / data.length).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.min(...data.map((d) => d.nh3)).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.max(...data.map((d) => d.nh3)).toFixed(2)}</td>
+                </tr>
+                <tr>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">PM2.5 (µg/m³)</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${(data.reduce((a, b) => a + b.pm25, 0) / data.length).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.min(...data.map((d) => d.pm25)).toFixed(2)}</td>
+                  <td style="border: 1px solid #d1d5db; padding: 12px;">${Math.max(...data.map((d) => d.pm25)).toFixed(2)}</td>
+                </tr>
+              </table>
+            `
+                : "<p style='color: #dc2626;'>No data available</p>"
+            }
+          </div>
+
+          <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; font-size: 12px; color: #999;">
+            <p>This report was generated by iSENS-COOP System</p>
+            <p>For questions or concerns, please contact the system administrator</p>
+          </div>
+        </div>
+      `;
+
+      reportContainer.innerHTML = reportHTML;
+      document.body.appendChild(reportContainer);
+
+      // Convert HTML to canvas
+      const canvas = await html2canvas(reportContainer, {
+        backgroundColor: "#ffffff",
+        scale: 2,
+        logging: false,
+      });
+
+      // Create PDF
+      const pdf = new jsPDF({
+        orientation: "portrait",
+        unit: "mm",
+        format: "a4",
+      });
+
+      const imgData = canvas.toDataURL("image/png");
+      const imgWidth = 210; // A4 width in mm
+      const pageHeight = 297; // A4 height in mm
+      let heightLeft = canvas.height * (imgWidth / canvas.width);
+      let position = 0;
+
+      // Add image to PDF
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, heightLeft);
+      heightLeft -= pageHeight;
+
+      // Add multiple pages if needed
+      while (heightLeft > 0) {
+        position = heightLeft - canvas.height * (imgWidth / canvas.width);
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, imgWidth, heightLeft);
+        heightLeft -= pageHeight;
+      }
+
+      // Download PDF
+      pdf.save(`broiler_report_${selectedZoneLabel}_${reportDate}.pdf`);
+
+      // Clean up
+      document.body.removeChild(reportContainer);
+    } catch (error) {
+      console.error("Error generating PDF:", error);
+      alert("Failed to generate PDF report");
+    } finally {
+      setIsDownloadingPDF(false);
+    }
+  };
+
   return (
     <div className="space-y-8 p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -1236,7 +1437,7 @@ PM2.5 ≤ 35 µg/m³
       <hr className="border-gray-300 my-4" />
       {/* Global Controls - Sticky */}
       <section className="sticky top-0 z-50 bg-gray-50 rounded-2xl p-4 shadow-lg border-b-2 border-gray-300">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Select Zone
@@ -1255,6 +1456,28 @@ PM2.5 ≤ 35 µg/m³
 
           <div className="text-xs text-gray-500">
             Applied to all sections below
+          </div>
+
+          <div></div>
+
+          <div>
+            <button
+              onClick={generatePDFReport}
+              disabled={isDownloadingPDF || data.length === 0}
+              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
+            >
+              {isDownloadingPDF ? (
+                <>
+                  <span className="animate-spin">⏳</span>
+                  Generating...
+                </>
+              ) : (
+                <>
+                  <span>📄</span>
+                  Download Report
+                </>
+              )}
+            </button>
           </div>
         </div>
       </section>
