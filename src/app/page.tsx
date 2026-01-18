@@ -2946,6 +2946,16 @@ PM2.5 ≤ 35 µg/m³
           </div>
         )}
       </section>
+
+      {/* Footer Section */}
+      <footer className="mt-10 py-6 border-t text-center text-sm text-gray-600">
+        <p className="mb-2">© 2026 UMPSA • MOHE • IMaP. All rights reserved.</p>
+        <p className="mb-4">Contact: kamarul@umpsa.edu.my</p>
+        <p className="text-xs leading-relaxed">
+          Disclaimer: The data and visualizations provided by iSENS-COOP are for research and monitoring purposes only. 
+          Accuracy and reliability of predictions may vary. Users are responsible for interpreting and using the information appropriately.
+        </p>
+      </footer>
     </div>
   );
 }
