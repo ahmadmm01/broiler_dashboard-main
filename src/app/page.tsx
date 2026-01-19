@@ -2300,41 +2300,43 @@ PM2.5 ≤ 35 µg/m³
 
               {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
               {!isAllZone && (
-                <div className="flex flex-col gap-3 mb-4">
-                  <div>
-                    <label className="text-sm text-gray-600">Date</label>
-                    <input
-                      type="date"
-                      className="w-full border rounded-lg px-3 py-2"
-                      value={mortDate}
-                      onChange={(e) => setMortDate(e.target.value)}
-                    />
-                  </div>
+                <div className="mb-4">
+                  <div className="grid grid-cols-4 gap-2 mb-3">
+                    <div>
+                      <label className="text-sm text-gray-600">Date</label>
+                      <input
+                        type="date"
+                        className="w-full border rounded-lg px-3 py-2"
+                        value={mortDate}
+                        onChange={(e) => setMortDate(e.target.value)}
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-sm text-gray-600">Count</label>
-                    <input
-                      type="number"
-                      className="w-full border rounded-lg px-3 py-2"
-                      min={0}
-                      value={mortCount}
-                      onChange={(e) => setMortCount(Number(e.target.value))}
-                    />
-                  </div>
+                    <div>
+                      <label className="text-sm text-gray-600">Count</label>
+                      <input
+                        type="number"
+                        className="w-full border rounded-lg px-3 py-2"
+                        min={0}
+                        value={mortCount}
+                        onChange={(e) => setMortCount(Number(e.target.value))}
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-sm text-gray-600">Notes</label>
-                    <input
-                      className="w-full border rounded-lg px-3 py-2"
-                      placeholder="optional"
-                      value={mortNotes}
-                      onChange={(e) => setMortNotes(e.target.value)}
-                    />
+                    <div className="col-span-2">
+                      <label className="text-sm text-gray-600">Notes</label>
+                      <input
+                        className="w-full border rounded-lg px-3 py-2"
+                        placeholder="optional"
+                        value={mortNotes}
+                        onChange={(e) => setMortNotes(e.target.value)}
+                      />
+                    </div>
                   </div>
 
                   <button
                     onClick={addMortality}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
                   >
                     Add
                   </button>
@@ -2342,7 +2344,7 @@ PM2.5 ≤ 35 µg/m³
               )}
 
               {/* ================= TABLE ================= */}
-              <div className="overflow-x-auto">
+              <div className="max-h-52 overflow-auto border rounded-lg">
                 <table className="w-full text-sm">
                   <thead>
                     {isAllZone ? (
@@ -2460,42 +2462,44 @@ PM2.5 ≤ 35 µg/m³
 
               {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
               {!isAllZone && (
-                <div className="flex flex-col gap-3 mb-4">
-                  <div>
-                    <label className="text-sm text-gray-600">Date</label>
-                    <input
-                      type="date"
-                      className="w-full border rounded-lg px-3 py-2"
-                      value={consumpDate}
-                      onChange={(e) => setConsumpDate(e.target.value)}
-                    />
-                  </div>
+                <div className="mb-4">
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div>
+                      <label className="text-sm text-gray-600">Date</label>
+                      <input
+                        type="date"
+                        className="w-full border rounded-lg px-3 py-2"
+                        value={consumpDate}
+                        onChange={(e) => setConsumpDate(e.target.value)}
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-sm text-gray-600">Feed (kg)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="w-full border rounded-lg px-3 py-2"
-                      value={feedInput}
-                      onChange={(e) => setFeedInput(Number(e.target.value))}
-                    />
-                  </div>
+                    <div>
+                      <label className="text-sm text-gray-600">Feed (kg)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="w-full border rounded-lg px-3 py-2"
+                        value={feedInput}
+                        onChange={(e) => setFeedInput(Number(e.target.value))}
+                      />
+                    </div>
 
-                  <div>
-                    <label className="text-sm text-gray-600">Water (L)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="w-full border rounded-lg px-3 py-2"
-                      value={waterInput}
-                      onChange={(e) => setWaterInput(Number(e.target.value))}
-                    />
+                    <div>
+                      <label className="text-sm text-gray-600">Water (L)</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        className="w-full border rounded-lg px-3 py-2"
+                        value={waterInput}
+                        onChange={(e) => setWaterInput(Number(e.target.value))}
+                      />
+                    </div>
                   </div>
 
                   <button
                     onClick={addConsumption}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg"
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
                   >
                     Add
                   </button>
@@ -2503,7 +2507,7 @@ PM2.5 ≤ 35 µg/m³
               )}
 
               {/* ================= TABLE ================= */}
-              <div className="overflow-x-auto">
+              <div className="max-h-52 overflow-auto border rounded-lg">
                 <table className="w-full text-sm">
                   <thead>
                     {isAllZone ? (
