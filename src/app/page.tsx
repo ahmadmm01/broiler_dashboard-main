@@ -593,7 +593,7 @@ PM2.5 ≤ 35 µg/m³
     return reasons.length ? reasons.join(", ") : "Normal";
   }, [activityScore, data]);
   const ZONE_COLORS = {
-    A: "#ef4444",
+    A: "#f97316",
     B: "#3b82f6",
     C: "#10b981",
   } as const;
@@ -2424,7 +2424,7 @@ PM2.5 ≤ 35 µg/m³
                     <YAxis />
                     <Tooltip />
                     <Legend />
-                    <Bar dataKey="A" fill="#ef4444" name="Zone A" />
+                    <Bar dataKey="A" fill="#f97316" name="Zone A" />
                     <Bar dataKey="B" fill="#3b82f6" name="Zone B" />
                     <Bar dataKey="C" fill="#10b981" name="Zone C" />
                   </BarChart>
@@ -2616,7 +2616,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdA"
                       name="Std Feed (kg)"
-                      stroke="#ef4444"
+                      stroke="#f97316"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2639,7 +2639,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdFeedKg"
                       name="Std Feed (kg)"
-                      stroke="#ef4444"
+                      stroke="#f97316"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2688,7 +2688,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdA"
                       name="Std Water (L)"
-                      stroke="#ef4444"
+                      stroke="#f97316"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2711,7 +2711,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdWaterL"
                       name="Std Water (L)"
-                      stroke="#ef4444"
+                      stroke="#f97316"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2853,7 +2853,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdA"
                       name="Standard Weight (kg)"
-                      stroke="#ef4444"
+                      stroke="#f97316"
                       strokeDasharray="4 4"
                       dot={false}
                       isAnimationActive={false}
@@ -2878,7 +2878,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdWeightKg"
                       name="Standard Weight (kg)"
-                      stroke="#ef4444"
+                      stroke="#f97316"
                       strokeDasharray="4 4"
                       dot={false}
                       isAnimationActive={false}
