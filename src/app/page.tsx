@@ -2616,7 +2616,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdA"
                       name="Std Feed (kg)"
-                      stroke="#f97316"
+                      stroke="#aaaaaa"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2639,7 +2639,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdFeedKg"
                       name="Std Feed (kg)"
-                      stroke="#f97316"
+                      stroke="#aaaaaa"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2688,7 +2688,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdA"
                       name="Std Water (L)"
-                      stroke="#f97316"
+                      stroke="#aaaaaa"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2711,7 +2711,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdWaterL"
                       name="Std Water (L)"
-                      stroke="#f97316"
+                      stroke="#aaaaaa"
                       dot={false}
                       strokeDasharray="4 4"
                     />
@@ -2853,7 +2853,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdA"
                       name="Standard Weight (kg)"
-                      stroke="#f97316"
+                      stroke="#aaaaaa"
                       strokeDasharray="4 4"
                       dot={false}
                       isAnimationActive={false}
@@ -2878,7 +2878,7 @@ PM2.5 ≤ 35 µg/m³
                       type="monotone"
                       dataKey="stdWeightKg"
                       name="Standard Weight (kg)"
-                      stroke="#f97316"
+                      stroke="#aaaaaa"
                       strokeDasharray="4 4"
                       dot={false}
                       isAnimationActive={false}
