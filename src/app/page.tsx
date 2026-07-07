@@ -1,6 +1,30 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 import { standardBroilerWeight } from "./lib/broilerStandard";
+import {
+  createDemoConsumptionEntries,
+  createDemoMortalityEntries,
+  createDemoWeightEntries,
+} from "./lib/demoData";
+import {
+  addDays,
+  compareDateStrings,
+  dateToDayNumber,
+  formatDate,
+  getDemoWindowStart,
+} from "./lib/dateUtils";
+import { summarizeData } from "./lib/sensorData";
+import type {
+  ConsumptionEntry,
+  DataPoint,
+  LiveCard,
+  MortalityEntry,
+  MortalitySummaryRow,
+  SensorApiResponse,
+  WeightEntry,
+} from "./lib/types";
+import { usePersistentState } from "./lib/usePersistentState";
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import {
   LineChart,
@@ -19,206 +43,10 @@ import {
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
-// ========= Types =========
-type DataPoint = {
-  time: string;
-  dayLabel: string;
-  ts: number;
-  temp: number;
-  humidity: number;
-  co2: number;
-  nh3: number;
-  pm25: number;
-};
-
-type WeightEntry = {
-  zone: "A" | "B" | "C";
-  day: number;
-  stdWeightKg: number;
-  actualWeightKg: number;
-};
-
-type MortalityEntry = {
-  zone: "A" | "B" | "C";
-  date: string;
-  count: number;
-  notes?: string;
-};
-
-type ConsumptionEntry = {
-  zone: "A" | "B" | "C";
-  date: string;
-  feedKg: number;
-  waterL: number;
-};
-type LiveCard = {
-  label: string;
-  value: number;
-  unit: string;
-  limit: number;
-  icon: string;
-  color: "red" | "orange" | "yellow" | "green";
-};
-// ===== Raw JSON type =====
-type RawSensorItem = {
-  Timestamp: string;
-  "Temperature (°C)": string | number;
-  "Humidity (%)": string | number;
-  "CO2 (ppm)"?: string | number;
-  "CO₂ (ppm)"?: string | number;
-  "Ammonia (ppm)": string | number;
-  "PM2.5 (µg/m³)": string | number;
-};
-
-type MortalitySummaryRow = {
-  date: string;
-  A: number;
-  B: number;
-  C: number;
-};
 // ========= Helpers =========
 
 const clamp = (v: number, lo: number, hi: number) =>
   Math.min(Math.max(v, lo), hi);
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const DEMO_SENSOR_SPAN_DAYS = 36;
-
-const startOfDay = (date = new Date()) =>
-  new Date(date.getFullYear(), date.getMonth(), date.getDate());
-
-const addDays = (date: Date, days: number) => {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
-};
-
-const formatDate = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-
-const parseDateOnly = (value: string) => {
-  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
-  return new Date(year, month - 1, day);
-};
-
-const diffDays = (from: Date, to: Date) =>
-  Math.round((startOfDay(to).getTime() - startOfDay(from).getTime()) / DAY_MS);
-
-const getDemoWindowStart = () =>
-  addDays(startOfDay(), -DEMO_SENSOR_SPAN_DAYS);
-
-const dateToDayNumber = (date: string, startDate: string) =>
-  Math.max(1, diffDays(parseDateOnly(startDate), parseDateOnly(date)) + 1);
-
-const dayLabel = (date: Date) => `${date.getDate()}/${date.getMonth() + 1}`;
-
-const compareDateStrings = (a: string, b: string) =>
-  parseDateOnly(a).getTime() - parseDateOnly(b).getTime();
-
-function getRollingSensorRange(json: RawSensorItem[]) {
-  const dates = json.map((item) => parseDateOnly(item.Timestamp));
-  const sourceStart = new Date(Math.min(...dates.map((date) => date.getTime())));
-  const sourceEnd = new Date(Math.max(...dates.map((date) => date.getTime())));
-  const targetEnd = startOfDay();
-  const targetStart = addDays(targetEnd, -diffDays(sourceStart, sourceEnd));
-
-  return { sourceStart, targetStart };
-}
-
-function createDemoMortalityEntries(): MortalityEntry[] {
-  const startDate = getDemoWindowStart();
-  const weekly = [0, 7, 14, 21, 28, 35, 36].map((offset) =>
-    formatDate(addDays(startDate, offset))
-  );
-
-  return [
-    { zone: "A", date: weekly[0], count: 2, notes: "Heat stress" },
-    { zone: "B", date: weekly[0], count: 1 },
-    { zone: "C", date: weekly[0], count: 0 },
-
-    { zone: "A", date: weekly[1], count: 0 },
-    { zone: "B", date: weekly[1], count: 3, notes: "Ventilation issue" },
-    { zone: "C", date: weekly[1], count: 1 },
-
-    { zone: "A", date: weekly[2], count: 1 },
-    { zone: "B", date: weekly[2], count: 1 },
-    { zone: "C", date: weekly[2], count: 0 },
-
-    { zone: "A", date: weekly[3], count: 0 },
-    { zone: "B", date: weekly[3], count: 2 },
-    { zone: "C", date: weekly[3], count: 1, notes: "High NH3 levels" },
-
-    { zone: "A", date: weekly[4], count: 1 },
-    { zone: "B", date: weekly[4], count: 0 },
-    { zone: "C", date: weekly[4], count: 2, notes: "Feed contamination" },
-
-    { zone: "A", date: weekly[5], count: 0 },
-    { zone: "B", date: weekly[5], count: 1 },
-    { zone: "C", date: weekly[5], count: 0 },
-
-    { zone: "A", date: weekly[6], count: 2, notes: "Heat wave" },
-    { zone: "B", date: weekly[6], count: 2 },
-    { zone: "C", date: weekly[6], count: 1 },
-  ];
-}
-
-function createDemoConsumptionEntries(): ConsumptionEntry[] {
-  const startDate = getDemoWindowStart();
-  const dates = Array.from({ length: 5 }, (_, index) =>
-    formatDate(addDays(startDate, index))
-  );
-
-  return [
-    { zone: "A", date: dates[0], feedKg: 0.06, waterL: 0.13 },
-    { zone: "B", date: dates[0], feedKg: 0.061, waterL: 0.131 },
-    { zone: "C", date: dates[0], feedKg: 0.059, waterL: 0.129 },
-
-    { zone: "A", date: dates[1], feedKg: 0.07, waterL: 0.15 },
-    { zone: "B", date: dates[1], feedKg: 0.071, waterL: 0.152 },
-    { zone: "C", date: dates[1], feedKg: 0.069, waterL: 0.148 },
-
-    { zone: "A", date: dates[2], feedKg: 0.08, waterL: 0.18 },
-    { zone: "B", date: dates[2], feedKg: 0.081, waterL: 0.182 },
-    { zone: "C", date: dates[2], feedKg: 0.079, waterL: 0.178 },
-
-    { zone: "A", date: dates[3], feedKg: 0.1, waterL: 0.21 },
-    { zone: "B", date: dates[3], feedKg: 0.102, waterL: 0.212 },
-    { zone: "C", date: dates[3], feedKg: 0.098, waterL: 0.208 },
-
-    { zone: "A", date: dates[4], feedKg: 0.12, waterL: 0.25 },
-    { zone: "B", date: dates[4], feedKg: 0.121, waterL: 0.252 },
-    { zone: "C", date: dates[4], feedKg: 0.119, waterL: 0.248 },
-  ];
-}
-// ===== Helper: Build cards per zone =====
-function summarizeData(data: DataPoint[]) {
-  if (data.length === 0) return null;
-
-  const avg = (key: keyof DataPoint) =>
-    data.reduce((a, b) => a + (b[key] as number), 0) / data.length;
-
-  const max = (key: keyof DataPoint) =>
-    Math.max(...data.map((d) => d[key] as number));
-
-  const min = (key: keyof DataPoint) =>
-    Math.min(...data.map((d) => d[key] as number));
-
-  return {
-    temp: { avg: avg("temp"), min: min("temp"), max: max("temp") },
-    humidity: {
-      avg: avg("humidity"),
-      min: min("humidity"),
-      max: max("humidity"),
-    },
-    co2: { avg: avg("co2"), max: max("co2") },
-    nh3: { avg: avg("nh3"), max: max("nh3") },
-    pm25: { avg: avg("pm25"), max: max("pm25") },
-  };
-}
 
 function buildCards(latest: DataPoint, zoneLabel: string): LiveCard[] {
   return [
@@ -274,42 +102,17 @@ function standardFeedKg(day: number): number {
 function standardWaterL(day: number): number {
   return +(standardFeedKg(day) * 2.2).toFixed(3);
 }
-const PARAM_CONFIG = {
-  all: {
-    label: "All Parameters",
-    unit: "",
-  },
-  temp: {
-    label: "Temperature",
-    unit: "°C",
-    color: "#f87171",
-  },
-  humidity: {
-    label: "Humidity",
-    unit: "%",
-    color: "#34d399",
-  },
-  co2: {
-    label: "CO₂",
-    unit: "ppm",
-    color: "#60a5fa",
-  },
-  nh3: {
-    label: "NH₃",
-    unit: "ppm",
-    color: "#fbbf24",
-  },
-  pm25: {
-    label: "PM2.5",
-    unit: "µg/m³",
-    color: "#a855f7",
-  },
-} as const;
 
 const zoneLegendConfig = {
   A: { label: "Zone A", dot: "bg-red-500", text: "text-red-500" },
   B: { label: "Zone B", dot: "bg-blue-500", text: "text-blue-500" },
   C: { label: "Zone C", dot: "bg-green-500", text: "text-green-500" },
+} as const;
+
+const ZONE_COLORS = {
+  A: "#f97316",
+  B: "#3b82f6",
+  C: "#10b981",
 } as const;
 
 // ================= Tooltip Types =================
@@ -398,35 +201,16 @@ export default function DashboardPage() {
   const [data, setData] = useState<DataPoint[]>([]);
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
-  const [weights, setWeights] = useState<WeightEntry[]>(() => {
-    // Generate dummy weight data for days 1-30 for each zone
-    const dummyWeights: WeightEntry[] = [];
-    const zones: ("A" | "B" | "C")[] = ["A", "B", "C"];
-    
-    zones.forEach((zone) => {
-      for (let day = 1; day <= 30; day++) {
-        const stdWeight = standardBroilerWeight(day);
-        // Add zone-specific variation
-        let variance = (Math.random() - 0.5) * 0.06;
-        if (zone === "B") variance += 0.01; // Zone B sedikit lebih berat
-        if (zone === "C") variance -= 0.01; // Zone C sedikit lebih ringan
-        const actualWeight = +(stdWeight * (1 + variance)).toFixed(3);
-        
-        dummyWeights.push({
-          zone,
-          day,
-          stdWeightKg: stdWeight,
-          actualWeightKg: actualWeight,
-        });
-      }
-    });
-    return dummyWeights;
-  });
+  const [weights, setWeights] = usePersistentState<WeightEntry[]>(
+    "broiler-dashboard:v2:weights",
+    createDemoWeightEntries
+  );
   const [weightDay, setWeightDay] = useState<number>(31);
   const [actualWeight, setActualWeight] = useState<number>(0);
   // ====== Health & Behavior (prototype) ======
   // Mortality
-  const [mortality, setMortality] = useState<MortalityEntry[]>(
+  const [mortality, setMortality] = usePersistentState<MortalityEntry[]>(
+    "broiler-dashboard:v2:mortality",
     createDemoMortalityEntries
   );
 
@@ -565,16 +349,27 @@ PM2.5 ≤ 35 µg/m³
       });
 
       const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error ?? "Failed to generate AI insight");
+      }
+
+      if (!json.insight) {
+        throw new Error("AI insight response is empty");
+      }
+
       setAiInsight(json.insight);
-    } catch (err) {
-      setAiError("Failed to generate AI insight");
+    } catch (error) {
+      setAiError(
+        error instanceof Error ? error.message : "Failed to generate AI insight"
+      );
     } finally {
       setIsGeneratingInsight(false);
     }
   };
 
   // Consumption
-  const [consumptions, setConsumptions] = useState<ConsumptionEntry[]>(
+  const [consumptions, setConsumptions] = usePersistentState<ConsumptionEntry[]>(
+    "broiler-dashboard:v2:consumptions",
     createDemoConsumptionEntries
   );
   const [consumpDate, setConsumpDate] = useState<string>(() =>
@@ -657,13 +452,12 @@ PM2.5 ≤ 35 µg/m³
     if (activityScore < 35) reasons.push("Low movement");
     return reasons.length ? reasons.join(", ") : "Normal";
   }, [activityScore, data]);
-  const ZONE_COLORS = {
-    A: "#f97316",
-    B: "#3b82f6",
-    C: "#10b981",
-  } as const;
   // untuk chart (STATIC)
   const [chartData, setChartData] = useState<DataPoint[]>([]);
+  const [sensorMeta, setSensorMeta] = useState<SensorApiResponse["meta"] | null>(
+    null
+  );
+  const [sensorError, setSensorError] = useState<string | null>(null);
 
   const zoneData = useMemo(() => {
     if (chartData.length === 0) {
@@ -745,9 +539,6 @@ PM2.5 ≤ 35 µg/m³
     return appliedParam === "all" || appliedParam === param;
   };
 
-  const latestA = zoneData.A.at(-1);
-  const latestB = zoneData.B.at(-1);
-  const latestC = zoneData.C.at(-1);
   const correlationSeries = useMemo(() => {
     const applyAgg = (data: DataPoint[]) => {
       if (appliedAggregation === "all") return data;
@@ -776,30 +567,6 @@ PM2.5 ≤ 35 µg/m³
       },
     ];
   }, [selectedZone, appliedAggregation, aggregatedData, zoneData]);
-
-  const trendSeries = useMemo(() => {
-    if (selectedZone === "ALL") {
-      return [
-        { zone: "A", color: "#ef4444", data: zoneData.A },
-        { zone: "B", color: "#3b82f6", data: zoneData.B },
-        { zone: "C", color: "#10b981", data: zoneData.C },
-      ];
-    }
-
-    const colorMap = {
-      A: "#ef4444",
-      B: "#3b82f6",
-      C: "#10b981",
-    };
-
-    return [
-      {
-        zone: selectedZone,
-        color: colorMap[selectedZone],
-        data: zoneData[selectedZone],
-      },
-    ];
-  }, [selectedZone, zoneData]);
 
   // untuk live cards (LOOPING)
   const [liveIndex, setLiveIndex] = useState(0);
@@ -838,75 +605,29 @@ PM2.5 ≤ 35 µg/m³
   }, [livePoint]);
 
   const [liveData, setLiveData] = useState<DataPoint | null>(null);
-  const weeklyData = chartData.filter((_, i) => i % 7 === 0);
-  // ===== Aggregation logic =====
-  const singleZoneData = useMemo(() => {
-    if (selectedZone === "ALL") return [];
 
-    return zoneData[selectedZone];
-  }, [selectedZone, zoneData]);
-  const dailySingleZoneData = useMemo(() => {
-    return singleZoneData.filter((_, i) => i % 24 === 0);
-  }, [singleZoneData]);
-
-  const aggregatedZoneData = useMemo(() => {
-    const base = selectedZone === "ALL" ? chartData : zoneData[selectedZone];
-
-    // tampil 1 titik per HARI
-    return base.filter((_, i) => i % 24 === 0);
-  }, [selectedZone, chartData, zoneData]);
-
-  // ====== Fetch JSON & map ======
-
-  // ====== Fetch JSON & map (OPTIMIZED & TYPED) ======
+  // ====== Fetch sensor data from local data API ======
   useEffect(() => {
     let isMounted = true;
 
-    fetch("/data/broiler_data.json")
+    fetch("/api/sensors")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch broiler data");
         return res.json();
       })
-      .then((json: RawSensorItem[]) => {
-        const rollingRange = json.length > 0 ? getRollingSensorRange(json) : null;
-        const mapped: DataPoint[] = json.map((item) => {
-          const sourceDate = parseDateOnly(item.Timestamp);
-          const date = rollingRange
-            ? addDays(
-                rollingRange.targetStart,
-                diffDays(rollingRange.sourceStart, sourceDate)
-              )
-            : sourceDate;
-          const timestamp = formatDate(date);
-
-          return {
-            time: timestamp,
-
-            // label siap pakai untuk chart (NO new Date() di render)
-            dayLabel: dayLabel(date),
-
-            // numeric timestamp (untuk sorting / future zoom)
-            ts: date.getTime(),
-
-            temp: Number(item["Temperature (°C)"]),
-            humidity: Number(item["Humidity (%)"]),
-
-            // support CO2 & CO₂
-            co2: Number(item["CO₂ (ppm)"] ?? item["CO2 (ppm)"] ?? 0),
-
-            nh3: Number(item["Ammonia (ppm)"]),
-            pm25: Number(item["PM2.5 (µg/m³)"]),
-          };
-        });
-
+      .then((payload: SensorApiResponse) => {
         if (!isMounted) return;
 
+        const mapped = payload.data;
         setAllData(mapped);
         setChartData(mapped);
         setLiveData(mapped.at(-1) ?? null);
+        setSensorMeta(payload.meta);
+        setSensorError(null);
       })
       .catch((err) => {
         console.error("Error loading broiler data:", err);
+        setSensorError("Failed to load sensor data");
       });
 
     return () => {
@@ -929,7 +650,6 @@ PM2.5 ≤ 35 µg/m³
   }, [allData]);
 
   // ==== SAFE derivations tanpa early-return ====
-  const isLoading = data.length === 0;
   const liveByZone = useMemo(() => {
     if (!liveZoneData) return null;
 
@@ -1032,50 +752,6 @@ PM2.5 ≤ 35 µg/m³
       pm25C: zoneData.C[i]?.pm25,
     }));
   }, [chartData, zoneData]);
-
-  // ====== Cards ======
-  const cards = [
-    {
-      label: "Temperature",
-      value: latestSafe.temp,
-      unit: "°C",
-      limit: 32,
-      icon: "🌡️",
-      color: latestSafe.temp > 32 ? "red" : "green",
-    },
-    {
-      label: "Humidity",
-      value: latestSafe.humidity,
-      unit: "%",
-      limit: 85,
-      icon: "💧",
-      color: "green",
-    },
-    {
-      label: "CO₂",
-      value: latestSafe.co2,
-      unit: "ppm",
-      limit: 1200,
-      icon: "🌫️",
-      color: latestSafe.co2 > 1200 ? "red" : "green",
-    },
-    {
-      label: "NH₃",
-      value: latestSafe.nh3,
-      unit: "ppm",
-      limit: 5,
-      icon: "⚗️",
-      color: latestSafe.nh3 > 5 ? "orange" : "green",
-    },
-    {
-      label: "PM2.5",
-      value: latestSafe.pm25,
-      unit: "µg/m³",
-      limit: 35,
-      icon: "🫁",
-      color: latestSafe.pm25 > 35 ? "yellow" : "green",
-    },
-  ];
 
   // ====== Chart data for consumption vs standard ======
   const aggregatedAllZoneData = useMemo(() => {
@@ -1188,31 +864,6 @@ PM2.5 ≤ 35 µg/m³
         .sort((a, b) => compareDateStrings(a.date, b.date));
     }
   }, [consumptions, consumptionStartDate, visibleConsumptions, isAllZone]);
-
-  function summarizeData(data: DataPoint[]) {
-    if (data.length === 0) return null;
-
-    const avg = (key: keyof DataPoint) =>
-      data.reduce((a, b) => a + (b[key] as number), 0) / data.length;
-
-    const max = (key: keyof DataPoint) =>
-      Math.max(...data.map((d) => d[key] as number));
-
-    const min = (key: keyof DataPoint) =>
-      Math.min(...data.map((d) => d[key] as number));
-
-    return {
-      temp: { avg: avg("temp"), min: min("temp"), max: max("temp") },
-      humidity: {
-        avg: avg("humidity"),
-        min: min("humidity"),
-        max: max("humidity"),
-      },
-      co2: { avg: avg("co2"), max: max("co2") },
-      nh3: { avg: avg("nh3"), max: max("nh3") },
-      pm25: { avg: avg("pm25"), max: max("pm25") },
-    };
-  }
 
   // ====== Handlers ======
   const addMortality = () => {
@@ -1507,10 +1158,13 @@ PM2.5 ≤ 35 µg/m³
       {/* Header */}
       <header className="flex flex-col items-center gap-4 mb-2">
         <div className="flex gap-4">
-          <img
+          <Image
             src="/img/umpsa.png"
             alt="Logo UMPSA"
-            className="h-30 object-contain"
+            width={6000}
+            height={1115}
+            priority
+            className="h-30 w-auto object-contain"
           />
         </div>
         <div className="text-center">
@@ -2995,9 +2649,24 @@ PM2.5 ≤ 35 µg/m³
       {/* System Health */}
       <section>
         <h2 className="text-2xl font-semibold mb-2">System Health & Uptime</h2>
-        <div className="p-4 bg-gray-50 rounded-xl shadow flex flex-col sm:flex-row gap-4">
-          <div>📡 Status: {allData.length ? "Online" : "Starting…"}</div>
+        <div className="p-4 bg-gray-50 rounded-xl shadow grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div>
+            📡 Status: {sensorError ? "Error" : allData.length ? "Online" : "Starting…"}
+          </div>
+          <div>🕒 Latest Reading: {latestSafe.time}</div>
+          <div>
+            📅 Data Window:{" "}
+            {sensorMeta
+              ? `${sensorMeta.runtimeStart} to ${sensorMeta.runtimeEnd}`
+              : "-"}
+          </div>
+          <div>📦 Records: {sensorMeta?.records ?? allData.length}</div>
           <div>🔋 Battery: 95%</div>
+          {sensorError && (
+            <div className="sm:col-span-2 lg:col-span-5 text-red-600 text-sm">
+              {sensorError}
+            </div>
+          )}
         </div>
       </section>
 
