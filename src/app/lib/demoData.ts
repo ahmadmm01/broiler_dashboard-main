@@ -9,15 +9,24 @@ function seededUnit(day: number, zone: Zone) {
   return seed - Math.floor(seed);
 }
 
+function standardFeedKg(day: number): number {
+  return +(0.05 + 0.015 * Math.pow(day, 1.15)).toFixed(3);
+}
+
+function standardWaterL(day: number): number {
+  return +(standardFeedKg(day) * 2.2).toFixed(3);
+}
+
 export function createDemoWeightEntries(): WeightEntry[] {
   const dummyWeights: WeightEntry[] = [];
 
   ZONES.forEach((zone) => {
     for (let day = 1; day <= 30; day++) {
       const stdWeight = standardBroilerWeight(day);
-      let variance = (seededUnit(day, zone) - 0.5) * 0.06;
-      if (zone === "B") variance += 0.01;
-      if (zone === "C") variance -= 0.01;
+      let variance = (seededUnit(day, zone) - 0.5) * 0.025;
+      if (zone === "A") variance += 0.006;
+      if (zone === "B") variance += 0.025;
+      if (zone === "C") variance -= 0.032;
 
       dummyWeights.push({
         zone,
@@ -38,12 +47,12 @@ export function createDemoMortalityEntries(): MortalityEntry[] {
   );
 
   return [
-    { zone: "A", date: weekly[0], count: 2, notes: "Heat stress" },
+    { zone: "A", date: weekly[0], count: 1 },
     { zone: "B", date: weekly[0], count: 1 },
     { zone: "C", date: weekly[0], count: 0 },
 
     { zone: "A", date: weekly[1], count: 0 },
-    { zone: "B", date: weekly[1], count: 3, notes: "Ventilation issue" },
+    { zone: "B", date: weekly[1], count: 2, notes: "Ventilation issue" },
     { zone: "C", date: weekly[1], count: 1 },
 
     { zone: "A", date: weekly[2], count: 1 },
@@ -52,7 +61,7 @@ export function createDemoMortalityEntries(): MortalityEntry[] {
 
     { zone: "A", date: weekly[3], count: 0 },
     { zone: "B", date: weekly[3], count: 2 },
-    { zone: "C", date: weekly[3], count: 1, notes: "High NH3 levels" },
+    { zone: "C", date: weekly[3], count: 1, notes: "Dust build-up" },
 
     { zone: "A", date: weekly[4], count: 1 },
     { zone: "B", date: weekly[4], count: 0 },
@@ -63,36 +72,41 @@ export function createDemoMortalityEntries(): MortalityEntry[] {
     { zone: "C", date: weekly[5], count: 0 },
 
     { zone: "A", date: weekly[6], count: 2, notes: "Heat wave" },
-    { zone: "B", date: weekly[6], count: 2 },
+    { zone: "B", date: weekly[6], count: 2, notes: "Heat and ventilation stress" },
     { zone: "C", date: weekly[6], count: 1 },
   ];
 }
 
 export function createDemoConsumptionEntries(): ConsumptionEntry[] {
   const startDate = getDemoWindowStart();
-  const dates = Array.from({ length: 5 }, (_, index) =>
+  const dates = Array.from({ length: 7 }, (_, index) =>
     formatDate(addDays(startDate, index))
   );
 
-  return [
-    { zone: "A", date: dates[0], feedKg: 0.06, waterL: 0.13 },
-    { zone: "B", date: dates[0], feedKg: 0.061, waterL: 0.131 },
-    { zone: "C", date: dates[0], feedKg: 0.059, waterL: 0.129 },
+  return dates.flatMap((date, index) => {
+    const day = index + 1;
+    const feedStd = standardFeedKg(day);
+    const waterStd = standardWaterL(day);
 
-    { zone: "A", date: dates[1], feedKg: 0.07, waterL: 0.15 },
-    { zone: "B", date: dates[1], feedKg: 0.071, waterL: 0.152 },
-    { zone: "C", date: dates[1], feedKg: 0.069, waterL: 0.148 },
-
-    { zone: "A", date: dates[2], feedKg: 0.08, waterL: 0.18 },
-    { zone: "B", date: dates[2], feedKg: 0.081, waterL: 0.182 },
-    { zone: "C", date: dates[2], feedKg: 0.079, waterL: 0.178 },
-
-    { zone: "A", date: dates[3], feedKg: 0.1, waterL: 0.21 },
-    { zone: "B", date: dates[3], feedKg: 0.102, waterL: 0.212 },
-    { zone: "C", date: dates[3], feedKg: 0.098, waterL: 0.208 },
-
-    { zone: "A", date: dates[4], feedKg: 0.12, waterL: 0.25 },
-    { zone: "B", date: dates[4], feedKg: 0.121, waterL: 0.252 },
-    { zone: "C", date: dates[4], feedKg: 0.119, waterL: 0.248 },
-  ];
+    return [
+      {
+        zone: "A" as const,
+        date,
+        feedKg: +(feedStd * (0.99 + seededUnit(day, "A") * 0.02)).toFixed(3),
+        waterL: +(waterStd * (0.99 + seededUnit(day + 10, "A") * 0.02)).toFixed(3),
+      },
+      {
+        zone: "B" as const,
+        date,
+        feedKg: +(feedStd * (1.03 + seededUnit(day, "B") * 0.025)).toFixed(3),
+        waterL: +(waterStd * (1.04 + seededUnit(day + 10, "B") * 0.025)).toFixed(3),
+      },
+      {
+        zone: "C" as const,
+        date,
+        feedKg: +(feedStd * (0.91 + seededUnit(day, "C") * 0.025)).toFixed(3),
+        waterL: +(waterStd * (0.92 + seededUnit(day + 10, "C") * 0.025)).toFixed(3),
+      },
+    ];
+  });
 }

@@ -9,11 +9,12 @@ import {
 import {
   addDays,
   compareDateStrings,
+  DAY_MS,
   dateToDayNumber,
   formatDate,
   getDemoWindowStart,
 } from "./lib/dateUtils";
-import { summarizeData } from "./lib/sensorData";
+import { createZoneData, getZonePoint, summarizeData } from "./lib/sensorData";
 import type {
   ConsumptionEntry,
   DataPoint,
@@ -22,6 +23,7 @@ import type {
   MortalitySummaryRow,
   SensorApiResponse,
   WeightEntry,
+  Zone,
 } from "./lib/types";
 import { usePersistentState } from "./lib/usePersistentState";
 import Image from "next/image";
@@ -48,6 +50,116 @@ import html2canvas from "html2canvas";
 const clamp = (v: number, lo: number, hi: number) =>
   Math.min(Math.max(v, lo), hi);
 
+type SelectableZone = "ALL" | Zone;
+type AggregationMode = "all" | "daily" | "weekly" | "monthly";
+type TrendDatum = {
+  ts: number;
+  time: string;
+  dayLabel: string;
+  [key: string]: number | string | undefined;
+};
+
+const ACTIVITY_ZONE_ADJUSTMENT: Record<SelectableZone, number> = {
+  ALL: 0,
+  A: 2,
+  B: -18,
+  C: -50,
+};
+
+function calculateActivityScore(data: DataPoint[], zone: SelectableZone) {
+  const latest = data.at(-1);
+  if (!latest) return 50;
+
+  const tempPenalty = clamp(Math.abs(latest.temp - 28) * 3, 0, 40);
+  const humiPenalty = clamp(Math.abs(latest.humidity - 65) * 0.8, 0, 25);
+  return clamp(
+    90 - tempPenalty - humiPenalty + ACTIVITY_ZONE_ADJUSTMENT[zone],
+    5,
+    95
+  );
+}
+
+function getAbnormalReason(latest: DataPoint | undefined, activityScore: number) {
+  if (!latest) return "Insufficient data";
+
+  const reasons: string[] = [];
+  if (latest.temp > 32) reasons.push("High temperature");
+  if (latest.co2 > 1200) reasons.push("High CO₂");
+  if (latest.nh3 > 5) reasons.push("High NH₃");
+  if (latest.pm25 > 35) reasons.push("High PM2.5");
+  if (activityScore < 35) reasons.push("Low movement");
+
+  return reasons.length ? reasons.join(", ") : "Normal";
+}
+
+function readingClass(label: string, value: number, limit: number) {
+  if (value <= limit) return "text-gray-900";
+  if (label === "NH₃") return "text-orange-600";
+  if (label === "PM2.5") return "text-yellow-700";
+  return "text-red-600";
+}
+
+const formatTrendTick = (value: number | string) => {
+  const date = new Date(Number(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return `${date.getDate()}/${date.getMonth() + 1}`;
+};
+
+const formatTrendTooltipLabel = (value: number | string) => {
+  const date = new Date(Number(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+  return formatDate(date);
+};
+
+const trendCursor = { stroke: "#94a3b8", strokeWidth: 1 };
+const trendTooltipWrapper = { pointerEvents: "none" as const };
+
+function aggregateTrendRecords<T extends TrendDatum>(
+  data: T[],
+  mode: AggregationMode
+): T[] {
+  if (mode === "all" || data.length === 0) return data;
+
+  const firstTs = data[0].ts;
+  const groups = new Map<string, T[]>();
+
+  data.forEach((item) => {
+    const date = new Date(item.ts);
+    const key =
+      mode === "daily"
+        ? formatDate(date)
+        : mode === "weekly"
+          ? `week-${Math.floor((item.ts - firstTs) / (7 * DAY_MS))}`
+          : `month-${date.getFullYear()}-${date.getMonth()}`;
+
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  });
+
+  return Array.from(groups.values()).map((items) => {
+    const first = items[0];
+    const averaged: TrendDatum = { ...first };
+
+    Object.keys(first).forEach((key) => {
+      if (key === "ts") return;
+
+      const values = items
+        .map((item) => item[key])
+        .filter((value): value is number => typeof value === "number");
+
+      if (values.length > 0) {
+        averaged[key] = +(
+          values.reduce((sum, value) => sum + value, 0) / values.length
+        ).toFixed(2);
+      }
+    });
+
+    averaged.ts = first.ts;
+    averaged.time = formatDate(new Date(first.ts));
+    averaged.dayLabel = formatTrendTick(first.ts);
+    return averaged as T;
+  });
+}
+
 function buildCards(latest: DataPoint, zoneLabel: string): LiveCard[] {
   return [
     {
@@ -64,7 +176,7 @@ function buildCards(latest: DataPoint, zoneLabel: string): LiveCard[] {
       unit: "%",
       limit: 85,
       icon: "💧",
-      color: "green",
+      color: latest.humidity > 85 ? "red" : "green",
     },
     {
       label: `CO₂ (${zoneLabel})`,
@@ -202,7 +314,7 @@ export default function DashboardPage() {
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
   const [weights, setWeights] = usePersistentState<WeightEntry[]>(
-    "broiler-dashboard:v2:weights",
+    "broiler-dashboard:v3:weights",
     createDemoWeightEntries
   );
   const [weightDay, setWeightDay] = useState<number>(31);
@@ -210,7 +322,7 @@ export default function DashboardPage() {
   // ====== Health & Behavior (prototype) ======
   // Mortality
   const [mortality, setMortality] = usePersistentState<MortalityEntry[]>(
-    "broiler-dashboard:v2:mortality",
+    "broiler-dashboard:v3:mortality",
     createDemoMortalityEntries
   );
 
@@ -369,7 +481,7 @@ PM2.5 ≤ 35 µg/m³
 
   // Consumption
   const [consumptions, setConsumptions] = usePersistentState<ConsumptionEntry[]>(
-    "broiler-dashboard:v2:consumptions",
+    "broiler-dashboard:v3:consumptions",
     createDemoConsumptionEntries
   );
   const [consumpDate, setConsumpDate] = useState<string>(() =>
@@ -422,9 +534,7 @@ PM2.5 ≤ 35 µg/m³
   // ===== PDF Report Download =====
   const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
 
-  const [aggregation, setAggregation] = useState<
-    "all" | "daily" | "weekly" | "monthly"
-  >("all");
+  const [aggregation, setAggregation] = useState<AggregationMode>("all");
   // ================= APPLY FILTER STATE =================
   const [appliedParam, setAppliedParam] = useState(selectedParam);
   const [appliedAggregation, setAppliedAggregation] = useState(aggregation);
@@ -432,25 +542,11 @@ PM2.5 ≤ 35 µg/m³
 
   // Vision activity (dummy score)
   const activityScore = useMemo(() => {
-    const latest = data[data.length - 1];
-    if (!latest) return 50;
-    const tempPenalty = clamp(Math.abs(latest.temp - 28) * 3, 0, 40);
-    const humiPenalty = clamp(Math.abs(latest.humidity - 65) * 0.8, 0, 25);
-    //const noise = Math.random() * 10;
-    const noise = 0;
-    return clamp(90 - tempPenalty - humiPenalty + noise, 5, 95);
-  }, [data]);
+    return calculateActivityScore(data, selectedZone);
+  }, [data, selectedZone]);
 
   const abnormalReason = useMemo(() => {
-    const latest = data[data.length - 1];
-    if (!latest) return "Insufficient data";
-    const reasons: string[] = [];
-    if (latest.temp > 32) reasons.push("High temperature");
-    if (latest.co2 > 1200) reasons.push("High CO₂");
-    if (latest.nh3 > 5) reasons.push("High NH₃");
-    if (latest.pm25 > 35) reasons.push("High PM2.5");
-    if (activityScore < 35) reasons.push("Low movement");
-    return reasons.length ? reasons.join(", ") : "Normal";
+    return getAbnormalReason(data.at(-1), activityScore);
   }, [activityScore, data]);
   // untuk chart (STATIC)
   const [chartData, setChartData] = useState<DataPoint[]>([]);
@@ -460,35 +556,20 @@ PM2.5 ≤ 35 µg/m³
   const [sensorError, setSensorError] = useState<string | null>(null);
 
   const zoneData = useMemo(() => {
-    if (chartData.length === 0) {
-      return { A: [], B: [], C: [] };
-    }
-
-    return {
-      // Zone A = data asli
-      A: chartData,
-
-      // Zone B = sedikit lebih panas & lembap
-      B: chartData.map((d) => ({
-        ...d,
-        temp: +(d.temp + 0.8).toFixed(2),
-        humidity: +(d.humidity + 2).toFixed(2),
-        co2: Math.max(0, Math.round(d.co2 + 50)),
-        nh3: +(d.nh3 + 0.2).toFixed(2),
-        pm25: +(d.pm25 + 1.5).toFixed(2),
-      })),
-
-      // Zone C = sedikit lebih sejuk & kering
-      C: chartData.map((d) => ({
-        ...d,
-        temp: +(d.temp - 0.6).toFixed(2),
-        humidity: +(d.humidity - 3).toFixed(2),
-        co2: Math.max(0, Math.round(d.co2 - 40)),
-        nh3: Math.max(0, +(d.nh3 - 0.15).toFixed(2)),
-        pm25: Math.max(0, +(d.pm25 - 1).toFixed(2)),
-      })),
-    };
+    return createZoneData(chartData);
   }, [chartData]);
+  const activityByZone = useMemo(
+    () =>
+      (["A", "B", "C"] as const).map((zone) => {
+        const score = calculateActivityScore(zoneData[zone], zone);
+        return {
+          zone,
+          score,
+          reason: getAbnormalReason(zoneData[zone].at(-1), score),
+        };
+      }),
+    [zoneData]
+  );
   const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
     if (selectedZone !== "ALL") return [];
 
@@ -519,15 +600,7 @@ PM2.5 ≤ 35 µg/m³
         ? chartData
         : (zoneData[selectedZone as "A" | "B" | "C"] ?? []);
 
-    if (appliedAggregation === "all") return base;
-    if (appliedAggregation === "daily")
-      return base.filter((_, i) => i % 24 === 0);
-    if (appliedAggregation === "weekly")
-      return base.filter((_, i) => i % (24 * 7) === 0);
-    if (appliedAggregation === "monthly")
-      return base.filter((_, i) => i % (24 * 30) === 0);
-
-    return base;
+    return aggregateTrendRecords(base, appliedAggregation);
   }, [appliedAggregation, selectedZone, chartData, zoneData]);
 
   // =====================================================
@@ -540,16 +613,8 @@ PM2.5 ≤ 35 µg/m³
   };
 
   const correlationSeries = useMemo(() => {
-    const applyAgg = (data: DataPoint[]) => {
-      if (appliedAggregation === "all") return data;
-      if (appliedAggregation === "daily")
-        return data.filter((_, i) => i % 24 === 0);
-      if (appliedAggregation === "weekly")
-        return data.filter((_, i) => i % (24 * 7) === 0);
-      if (appliedAggregation === "monthly")
-        return data.filter((_, i) => i % (24 * 30) === 0);
-      return data;
-    };
+    const applyAgg = (data: DataPoint[]) =>
+      aggregateTrendRecords(data, appliedAggregation);
 
     if (selectedZone === "ALL") {
       return [
@@ -584,25 +649,11 @@ PM2.5 ≤ 35 µg/m³
     if (!livePoint) return null;
 
     return {
-      A: livePoint,
-      B: {
-        ...livePoint,
-        temp: +(livePoint.temp + 0.8).toFixed(2),
-        humidity: +(livePoint.humidity + 2).toFixed(2),
-        co2: livePoint.co2 + 50,
-        nh3: +(livePoint.nh3 + 0.2).toFixed(2),
-        pm25: +(livePoint.pm25 + 1.5).toFixed(2),
-      },
-      C: {
-        ...livePoint,
-        temp: +(livePoint.temp - 0.6).toFixed(2),
-        humidity: +(livePoint.humidity - 3).toFixed(2),
-        co2: Math.max(0, livePoint.co2 - 40),
-        nh3: Math.max(0, +(livePoint.nh3 - 0.15).toFixed(2)),
-        pm25: Math.max(0, +(livePoint.pm25 - 1).toFixed(2)),
-      },
+      A: getZonePoint(livePoint, liveIndex, allData.length, "A"),
+      B: getZonePoint(livePoint, liveIndex, allData.length, "B"),
+      C: getZonePoint(livePoint, liveIndex, allData.length, "C"),
     };
-  }, [livePoint]);
+  }, [allData.length, liveIndex, livePoint]);
 
   const [liveData, setLiveData] = useState<DataPoint | null>(null);
 
@@ -622,6 +673,7 @@ PM2.5 ≤ 35 µg/m³
         setAllData(mapped);
         setChartData(mapped);
         setLiveData(mapped.at(-1) ?? null);
+        setLiveIndex(Math.max(0, mapped.length - 1));
         setSensorMeta(payload.meta);
         setSensorError(null);
       })
@@ -657,6 +709,7 @@ PM2.5 ≤ 35 µg/m³
       {
         label: "Temperature",
         unit: "°C",
+        limit: 32,
         icon: "🌡️",
         values: [
           { zone: "A", value: liveZoneData.A.temp },
@@ -667,6 +720,7 @@ PM2.5 ≤ 35 µg/m³
       {
         label: "Humidity",
         unit: "%",
+        limit: 85,
         icon: "💧",
         values: [
           { zone: "A", value: liveZoneData.A.humidity },
@@ -677,6 +731,7 @@ PM2.5 ≤ 35 µg/m³
       {
         label: "CO₂",
         unit: "ppm",
+        limit: 1200,
         icon: "🌫️",
         values: [
           { zone: "A", value: liveZoneData.A.co2 },
@@ -687,6 +742,7 @@ PM2.5 ≤ 35 µg/m³
       {
         label: "NH₃",
         unit: "ppm",
+        limit: 5,
         icon: "⚗️",
         values: [
           { zone: "A", value: liveZoneData.A.nh3 },
@@ -697,6 +753,7 @@ PM2.5 ≤ 35 µg/m³
       {
         label: "PM2.5",
         unit: "µg/m³",
+        limit: 35,
         icon: "🫁",
         values: [
           { zone: "A", value: liveZoneData.A.pm25 },
@@ -730,24 +787,25 @@ PM2.5 ≤ 35 µg/m³
     return chartData.map((d, i) => ({
       time: d.time,
       dayLabel: d.dayLabel, // ✅ INI KUNCINYA
+      ts: d.ts,
 
-      tempA: d.temp,
+      tempA: zoneData.A[i]?.temp,
       tempB: zoneData.B[i]?.temp,
       tempC: zoneData.C[i]?.temp,
 
-      humidityA: d.humidity,
+      humidityA: zoneData.A[i]?.humidity,
       humidityB: zoneData.B[i]?.humidity,
       humidityC: zoneData.C[i]?.humidity,
 
-      co2A: d.co2,
+      co2A: zoneData.A[i]?.co2,
       co2B: zoneData.B[i]?.co2,
       co2C: zoneData.C[i]?.co2,
 
-      nh3A: d.nh3,
+      nh3A: zoneData.A[i]?.nh3,
       nh3B: zoneData.B[i]?.nh3,
       nh3C: zoneData.C[i]?.nh3,
 
-      pm25A: d.pm25,
+      pm25A: zoneData.A[i]?.pm25,
       pm25B: zoneData.B[i]?.pm25,
       pm25C: zoneData.C[i]?.pm25,
     }));
@@ -755,19 +813,13 @@ PM2.5 ≤ 35 µg/m³
 
   // ====== Chart data for consumption vs standard ======
   const aggregatedAllZoneData = useMemo(() => {
-    const applyAgg = (data: any[]) => {
-      if (appliedAggregation === "all") return data;
-      if (appliedAggregation === "daily")
-        return data.filter((_, i) => i % 24 === 0);
-      if (appliedAggregation === "weekly")
-        return data.filter((_, i) => i % (24 * 7) === 0);
-      if (appliedAggregation === "monthly")
-        return data.filter((_, i) => i % (24 * 30) === 0);
-      return data;
-    };
-
-    return applyAgg(allZoneCombinedData);
+    return aggregateTrendRecords(allZoneCombinedData, appliedAggregation);
   }, [allZoneCombinedData, appliedAggregation]);
+
+  const trendChartData = useMemo(
+    () => (selectedZone === "ALL" ? aggregatedAllZoneData : aggregatedData),
+    [aggregatedAllZoneData, aggregatedData, selectedZone]
+  );
 
   const visibleConsumptions = useMemo(() => {
     if (selectedZone === "ALL") return consumptions;
@@ -1294,31 +1346,54 @@ PM2.5 ≤ 35 µg/m³
         {/* ================= ALL ZONES ================= */}
         {selectedZone === "ALL" && liveByZone && (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
-            {liveByZone.map((item) => (
-              <div
-                key={item.label}
-                className="p-4 rounded-2xl border bg-green-50 border-green-200 shadow-sm"
-              >
-                <div className="text-3xl mb-2">{item.icon}</div>
-                <p className="text-sm text-gray-600 mb-2">{item.label}</p>
+            {liveByZone.map((item) => {
+              const hasAlert = item.values.some((v) => v.value > item.limit);
 
-                <div className="space-y-2 text-sm">
-                  {item.values.map((v) => (
-                    <div
-                      key={v.zone}
-                      className="grid grid-cols-[70px_auto] items-center"
-                    >
-                      <span className="text-xs text-gray-400">
-                        Zone {v.zone}
-                      </span>
-                      <span className="text-sm font-semibold">
-                        {v.value.toFixed(2)} {item.unit}
-                      </span>
-                    </div>
-                  ))}
+              return (
+                <div
+                  key={item.label}
+                  className={`p-4 rounded-2xl border shadow-sm ${
+                    hasAlert
+                      ? "bg-amber-50 border-amber-200"
+                      : "bg-green-50 border-green-200"
+                  }`}
+                >
+                  <div className="text-3xl mb-2">{item.icon}</div>
+                  <p className="text-sm text-gray-600 mb-2">{item.label}</p>
+
+                  <div className="space-y-2 text-sm">
+                    {item.values.map((v) => {
+                      const isHigh = v.value > item.limit;
+
+                      return (
+                        <div
+                          key={v.zone}
+                          className="grid grid-cols-[70px_auto] items-center"
+                        >
+                          <span className="text-xs text-gray-400">
+                            Zone {v.zone}
+                          </span>
+                          <span
+                            className={`text-sm font-semibold ${readingClass(
+                              item.label,
+                              v.value,
+                              item.limit
+                            )}`}
+                          >
+                            {v.value.toFixed(2)} {item.unit}
+                            {isHigh && (
+                              <span className="ml-2 text-[10px] uppercase tracking-wide">
+                                High
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -1404,7 +1479,8 @@ PM2.5 ≤ 35 µg/m³
             <span className="animate-pulse">Loading trend data…</span>
           </div>
         )}
-        {!isApplying && <>{/* SEMUA TREND CHART DI SINI */}</>}
+        {!isApplying && (
+          <>
 
         {/* ================= TEMPERATURE ================= */}
         {showParam("temp") && (
@@ -1412,17 +1488,25 @@ PM2.5 ≤ 35 µg/m³
             <h3 className="font-semibold">Temperature (°C)</h3>
 
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={
-                  selectedZone === "ALL"
-                    ? aggregatedAllZoneData
-                    : aggregatedData
-                }
-              >
+              <LineChart data={trendChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="dayLabel" />
+                <XAxis
+                  dataKey="ts"
+                  type="number"
+                  scale="time"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={formatTrendTick}
+                  minTickGap={28}
+                  tickCount={8}
+                />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  labelFormatter={formatTrendTooltipLabel}
+                  isAnimationActive={false}
+                  animationDuration={0}
+                  cursor={trendCursor}
+                  wrapperStyle={trendTooltipWrapper}
+                />
                 <Legend />
 
                 {selectedZone === "ALL" ? (
@@ -1432,18 +1516,24 @@ PM2.5 ≤ 35 µg/m³
                       name="Zone A"
                       stroke={ZONE_COLORS.A}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="tempB"
                       name="Zone B"
                       stroke={ZONE_COLORS.B}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="tempC"
                       name="Zone C"
                       stroke={ZONE_COLORS.C}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                   </>
                 ) : (
@@ -1452,6 +1542,8 @@ PM2.5 ≤ 35 µg/m³
                     name={`Zone ${selectedZone}`}
                     stroke={ZONE_COLORS[selectedZone]}
                     dot={false}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 )}
               </LineChart>
@@ -1465,17 +1557,25 @@ PM2.5 ≤ 35 µg/m³
             <h3 className="font-semibold">Humidity (%)</h3>
 
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={
-                  selectedZone === "ALL"
-                    ? aggregatedAllZoneData
-                    : aggregatedData
-                }
-              >
+              <LineChart data={trendChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="dayLabel" />
+                <XAxis
+                  dataKey="ts"
+                  type="number"
+                  scale="time"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={formatTrendTick}
+                  minTickGap={28}
+                  tickCount={8}
+                />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  labelFormatter={formatTrendTooltipLabel}
+                  isAnimationActive={false}
+                  animationDuration={0}
+                  cursor={trendCursor}
+                  wrapperStyle={trendTooltipWrapper}
+                />
                 <Legend />
 
                 {selectedZone === "ALL" ? (
@@ -1485,18 +1585,24 @@ PM2.5 ≤ 35 µg/m³
                       name="Zone A"
                       stroke={ZONE_COLORS.A}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="humidityB"
                       name="Zone B"
                       stroke={ZONE_COLORS.B}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="humidityC"
                       name="Zone C"
                       stroke={ZONE_COLORS.C}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                   </>
                 ) : (
@@ -1505,6 +1611,8 @@ PM2.5 ≤ 35 µg/m³
                     name={`Zone ${selectedZone}`}
                     stroke={ZONE_COLORS[selectedZone]}
                     dot={false}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 )}
               </LineChart>
@@ -1518,17 +1626,25 @@ PM2.5 ≤ 35 µg/m³
             <h3 className="font-semibold">CO₂ (ppm)</h3>
 
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={
-                  selectedZone === "ALL"
-                    ? aggregatedAllZoneData
-                    : aggregatedData
-                }
-              >
+              <LineChart data={trendChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="dayLabel" />
+                <XAxis
+                  dataKey="ts"
+                  type="number"
+                  scale="time"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={formatTrendTick}
+                  minTickGap={28}
+                  tickCount={8}
+                />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  labelFormatter={formatTrendTooltipLabel}
+                  isAnimationActive={false}
+                  animationDuration={0}
+                  cursor={trendCursor}
+                  wrapperStyle={trendTooltipWrapper}
+                />
                 <Legend />
 
                 {selectedZone === "ALL" ? (
@@ -1538,18 +1654,24 @@ PM2.5 ≤ 35 µg/m³
                       name="Zone A"
                       stroke={ZONE_COLORS.A}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="co2B"
                       name="Zone B"
                       stroke={ZONE_COLORS.B}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="co2C"
                       name="Zone C"
                       stroke={ZONE_COLORS.C}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                   </>
                 ) : (
@@ -1558,6 +1680,8 @@ PM2.5 ≤ 35 µg/m³
                     name={`Zone ${selectedZone}`}
                     stroke={ZONE_COLORS[selectedZone]}
                     dot={false}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 )}
               </LineChart>
@@ -1571,17 +1695,25 @@ PM2.5 ≤ 35 µg/m³
             <h3 className="font-semibold">NH₃ (ppm)</h3>
 
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={
-                  selectedZone === "ALL"
-                    ? aggregatedAllZoneData
-                    : aggregatedData
-                }
-              >
+              <LineChart data={trendChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="dayLabel" />
+                <XAxis
+                  dataKey="ts"
+                  type="number"
+                  scale="time"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={formatTrendTick}
+                  minTickGap={28}
+                  tickCount={8}
+                />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  labelFormatter={formatTrendTooltipLabel}
+                  isAnimationActive={false}
+                  animationDuration={0}
+                  cursor={trendCursor}
+                  wrapperStyle={trendTooltipWrapper}
+                />
                 <Legend />
 
                 {selectedZone === "ALL" ? (
@@ -1591,18 +1723,24 @@ PM2.5 ≤ 35 µg/m³
                       name="Zone A"
                       stroke={ZONE_COLORS.A}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="nh3B"
                       name="Zone B"
                       stroke={ZONE_COLORS.B}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="nh3C"
                       name="Zone C"
                       stroke={ZONE_COLORS.C}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                   </>
                 ) : (
@@ -1611,6 +1749,8 @@ PM2.5 ≤ 35 µg/m³
                     name={`Zone ${selectedZone}`}
                     stroke={ZONE_COLORS[selectedZone]}
                     dot={false}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 )}
               </LineChart>
@@ -1624,17 +1764,25 @@ PM2.5 ≤ 35 µg/m³
             <h3 className="font-semibold">PM2.5 (µg/m³)</h3>
 
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart
-                data={
-                  selectedZone === "ALL"
-                    ? aggregatedAllZoneData
-                    : aggregatedData
-                }
-              >
+              <LineChart data={trendChartData}>
                 <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="dayLabel" />
+                <XAxis
+                  dataKey="ts"
+                  type="number"
+                  scale="time"
+                  domain={["dataMin", "dataMax"]}
+                  tickFormatter={formatTrendTick}
+                  minTickGap={28}
+                  tickCount={8}
+                />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  labelFormatter={formatTrendTooltipLabel}
+                  isAnimationActive={false}
+                  animationDuration={0}
+                  cursor={trendCursor}
+                  wrapperStyle={trendTooltipWrapper}
+                />
                 <Legend />
 
                 {selectedZone === "ALL" ? (
@@ -1644,18 +1792,24 @@ PM2.5 ≤ 35 µg/m³
                       name="Zone A"
                       stroke={ZONE_COLORS.A}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="pm25B"
                       name="Zone B"
                       stroke={ZONE_COLORS.B}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                     <Line
                       dataKey="pm25C"
                       name="Zone C"
                       stroke={ZONE_COLORS.C}
                       dot={false}
+                      activeDot={{ r: 3 }}
+                      isAnimationActive={false}
                     />
                   </>
                 ) : (
@@ -1664,11 +1818,15 @@ PM2.5 ≤ 35 µg/m³
                     name={`Zone ${selectedZone}`}
                     stroke={ZONE_COLORS[selectedZone]}
                     dot={false}
+                    activeDot={{ r: 3 }}
+                    isAnimationActive={false}
                   />
                 )}
               </LineChart>
             </ResponsiveContainer>
           </div>
+        )}
+          </>
         )}
       </section>
 
@@ -1965,7 +2123,7 @@ PM2.5 ≤ 35 µg/m³
         {/* All zones activity view */}
         {selectedZone === "ALL" && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-            {(["A", "B", "C"] as const).map((zone) => (
+            {activityByZone.map(({ zone, score, reason }) => (
               <div key={zone} className="bg-white rounded-2xl shadow p-4">
                 <h3 className="font-semibold text-lg mb-3">
                   Activity Analysis – Zone {zone}
@@ -2002,26 +2160,30 @@ PM2.5 ≤ 35 µg/m³
                   <div className="p-2 rounded-lg bg-gray-50">
                     <div className="text-gray-500">Activity Score</div>
                     <div className="text-lg font-semibold">
-                      {Math.round(activityScore)}
+                      {Math.round(score)}
                     </div>
                   </div>
                   <div className="p-2 rounded-lg bg-gray-50">
                     <div className="text-gray-500">Status</div>
                     <div
                       className={`font-semibold ${
-                        activityScore < 35
+                        score < 35
                           ? "text-red-600"
-                          : activityScore < 60
+                          : score < 60
                             ? "text-yellow-600"
                             : "text-green-700"
                       }`}
                     >
-                      {activityScore < 35
+                      {score < 35
                         ? "Abnormal"
-                        : activityScore < 60
+                        : score < 60
                           ? "Moderate"
                           : "Normal"}
                     </div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-gray-50">
+                    <div className="text-gray-500">Reason</div>
+                    <div className="text-xs">{reason}</div>
                   </div>
                 </div>
               </div>
