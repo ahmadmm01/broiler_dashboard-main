@@ -80,6 +80,120 @@ type MortalitySummaryRow = {
 
 const clamp = (v: number, lo: number, hi: number) =>
   Math.min(Math.max(v, lo), hi);
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEMO_SENSOR_SPAN_DAYS = 36;
+
+const startOfDay = (date = new Date()) =>
+  new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+const addDays = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
+const formatDate = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+const parseDateOnly = (value: string) => {
+  const [year, month, day] = value.slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+};
+
+const diffDays = (from: Date, to: Date) =>
+  Math.round((startOfDay(to).getTime() - startOfDay(from).getTime()) / DAY_MS);
+
+const getDemoWindowStart = () =>
+  addDays(startOfDay(), -DEMO_SENSOR_SPAN_DAYS);
+
+const dateToDayNumber = (date: string, startDate: string) =>
+  Math.max(1, diffDays(parseDateOnly(startDate), parseDateOnly(date)) + 1);
+
+const dayLabel = (date: Date) => `${date.getDate()}/${date.getMonth() + 1}`;
+
+const compareDateStrings = (a: string, b: string) =>
+  parseDateOnly(a).getTime() - parseDateOnly(b).getTime();
+
+function getRollingSensorRange(json: RawSensorItem[]) {
+  const dates = json.map((item) => parseDateOnly(item.Timestamp));
+  const sourceStart = new Date(Math.min(...dates.map((date) => date.getTime())));
+  const sourceEnd = new Date(Math.max(...dates.map((date) => date.getTime())));
+  const targetEnd = startOfDay();
+  const targetStart = addDays(targetEnd, -diffDays(sourceStart, sourceEnd));
+
+  return { sourceStart, targetStart };
+}
+
+function createDemoMortalityEntries(): MortalityEntry[] {
+  const startDate = getDemoWindowStart();
+  const weekly = [0, 7, 14, 21, 28, 35, 36].map((offset) =>
+    formatDate(addDays(startDate, offset))
+  );
+
+  return [
+    { zone: "A", date: weekly[0], count: 2, notes: "Heat stress" },
+    { zone: "B", date: weekly[0], count: 1 },
+    { zone: "C", date: weekly[0], count: 0 },
+
+    { zone: "A", date: weekly[1], count: 0 },
+    { zone: "B", date: weekly[1], count: 3, notes: "Ventilation issue" },
+    { zone: "C", date: weekly[1], count: 1 },
+
+    { zone: "A", date: weekly[2], count: 1 },
+    { zone: "B", date: weekly[2], count: 1 },
+    { zone: "C", date: weekly[2], count: 0 },
+
+    { zone: "A", date: weekly[3], count: 0 },
+    { zone: "B", date: weekly[3], count: 2 },
+    { zone: "C", date: weekly[3], count: 1, notes: "High NH3 levels" },
+
+    { zone: "A", date: weekly[4], count: 1 },
+    { zone: "B", date: weekly[4], count: 0 },
+    { zone: "C", date: weekly[4], count: 2, notes: "Feed contamination" },
+
+    { zone: "A", date: weekly[5], count: 0 },
+    { zone: "B", date: weekly[5], count: 1 },
+    { zone: "C", date: weekly[5], count: 0 },
+
+    { zone: "A", date: weekly[6], count: 2, notes: "Heat wave" },
+    { zone: "B", date: weekly[6], count: 2 },
+    { zone: "C", date: weekly[6], count: 1 },
+  ];
+}
+
+function createDemoConsumptionEntries(): ConsumptionEntry[] {
+  const startDate = getDemoWindowStart();
+  const dates = Array.from({ length: 5 }, (_, index) =>
+    formatDate(addDays(startDate, index))
+  );
+
+  return [
+    { zone: "A", date: dates[0], feedKg: 0.06, waterL: 0.13 },
+    { zone: "B", date: dates[0], feedKg: 0.061, waterL: 0.131 },
+    { zone: "C", date: dates[0], feedKg: 0.059, waterL: 0.129 },
+
+    { zone: "A", date: dates[1], feedKg: 0.07, waterL: 0.15 },
+    { zone: "B", date: dates[1], feedKg: 0.071, waterL: 0.152 },
+    { zone: "C", date: dates[1], feedKg: 0.069, waterL: 0.148 },
+
+    { zone: "A", date: dates[2], feedKg: 0.08, waterL: 0.18 },
+    { zone: "B", date: dates[2], feedKg: 0.081, waterL: 0.182 },
+    { zone: "C", date: dates[2], feedKg: 0.079, waterL: 0.178 },
+
+    { zone: "A", date: dates[3], feedKg: 0.1, waterL: 0.21 },
+    { zone: "B", date: dates[3], feedKg: 0.102, waterL: 0.212 },
+    { zone: "C", date: dates[3], feedKg: 0.098, waterL: 0.208 },
+
+    { zone: "A", date: dates[4], feedKg: 0.12, waterL: 0.25 },
+    { zone: "B", date: dates[4], feedKg: 0.121, waterL: 0.252 },
+    { zone: "C", date: dates[4], feedKg: 0.119, waterL: 0.248 },
+  ];
+}
 // ===== Helper: Build cards per zone =====
 function summarizeData(data: DataPoint[]) {
   if (data.length === 0) return null;
@@ -312,45 +426,12 @@ export default function DashboardPage() {
   const [actualWeight, setActualWeight] = useState<number>(0);
   // ====== Health & Behavior (prototype) ======
   // Mortality
-  const [mortality, setMortality] = useState<MortalityEntry[]>([
-    // ===== Date: 2026-01-01 =====
-    { zone: "A", date: "2025-07-01", count: 2, notes: "Heat stress" },
-    { zone: "B", date: "2025-07-01", count: 1 },
-    { zone: "C", date: "2025-07-01", count: 0 },
-
-    // ===== Date: 2026-01-02 =====
-    { zone: "A", date: "2025-07-08", count: 0 },
-    { zone: "B", date: "2025-07-08", count: 3, notes: "Ventilation issue" },
-    { zone: "C", date: "2025-07-08", count: 1 },
-
-    // ===== Date: 2026-01-03 =====
-    { zone: "A", date: "2025-07-15", count: 1 },
-    { zone: "B", date: "2025-07-15", count: 1 },
-    { zone: "C", date: "2025-07-15", count: 0 },
-    
-    // ===== Date: 2026-01-04 =====
-    { zone: "A", date: "2025-07-22", count: 0 },
-    { zone: "B", date: "2025-07-22", count: 2 },
-    { zone: "C", date: "2025-07-22", count: 1, notes: "High NH3 levels" },
-    
-    // ===== Date: 2026-01-05 =====
-    { zone: "A", date: "2025-07-29", count: 1 },
-    { zone: "B", date: "2025-07-29", count: 0 },
-    { zone: "C", date: "2025-07-29", count: 2, notes: "Feed contamination" },
-    
-    // ===== Date: 2026-01-06 =====
-    { zone: "A", date: "2025-08-05", count: 0 },
-    { zone: "B", date: "2025-08-05", count: 1 },
-    { zone: "C", date: "2025-08-05", count: 0 },
-    
-    // ===== Date: 2026-01-07 =====
-    { zone: "A", date: "2025-08-12", count: 2, notes: "Heat wave" },
-    { zone: "B", date: "2025-08-12", count: 2 },
-    { zone: "C", date: "2025-08-12", count: 1 },
-  ]);
+  const [mortality, setMortality] = useState<MortalityEntry[]>(
+    createDemoMortalityEntries
+  );
 
   const [mortDate, setMortDate] = useState<string>(() =>
-    new Date().toISOString().slice(0, 10)
+    formatDate(new Date())
   );
   const [mortCount, setMortCount] = useState<number>(0);
   const [mortNotes, setMortNotes] = useState<string>("");
@@ -493,28 +574,12 @@ PM2.5 ≤ 35 µg/m³
   };
 
   // Consumption
-  const [consumptions, setConsumptions] = useState<ConsumptionEntry[]>([
-    { zone: "A", date: "2025-07-01", feedKg: 0.06, waterL: 0.13 },
-    { zone: "B", date: "2025-07-01", feedKg: 0.061, waterL: 0.131 },
-    { zone: "C", date: "2025-07-01", feedKg: 0.059, waterL: 0.129 },
-
-    { zone: "A", date: "2025-07-02", feedKg: 0.07, waterL: 0.15 },
-    { zone: "B", date: "2025-07-02", feedKg: 0.071, waterL: 0.152 },
-    { zone: "C", date: "2025-07-02", feedKg: 0.069, waterL: 0.148 },
-
-    { zone: "A", date: "2025-07-03", feedKg: 0.08, waterL: 0.18 },
-    { zone: "B", date: "2025-07-03", feedKg: 0.081, waterL: 0.182 },
-    { zone: "C", date: "2025-07-03", feedKg: 0.079, waterL: 0.178 },
-
-    { zone: "A", date: "2025-07-04", feedKg: 0.1, waterL: 0.21 },
-    { zone: "B", date: "2025-07-04", feedKg: 0.102, waterL: 0.212 },
-    { zone: "C", date: "2025-07-04", feedKg: 0.098, waterL: 0.208 },
-
-    { zone: "A", date: "2025-07-05", feedKg: 0.12, waterL: 0.25 },
-    { zone: "B", date: "2025-07-05", feedKg: 0.121, waterL: 0.252 },
-    { zone: "C", date: "2025-07-05", feedKg: 0.119, waterL: 0.248 },
-  ]);
-  const [consumpDate, setConsumpDate] = useState<string>("2025-07-06");
+  const [consumptions, setConsumptions] = useState<ConsumptionEntry[]>(
+    createDemoConsumptionEntries
+  );
+  const [consumpDate, setConsumpDate] = useState<string>(() =>
+    formatDate(addDays(getDemoWindowStart(), 5))
+  );
   const [feedInput, setFeedInput] = useState<number>(0.1);
   const [waterInput, setWaterInput] = useState<number>(0.22);
 
@@ -803,14 +868,22 @@ PM2.5 ≤ 35 µg/m³
         return res.json();
       })
       .then((json: RawSensorItem[]) => {
+        const rollingRange = json.length > 0 ? getRollingSensorRange(json) : null;
         const mapped: DataPoint[] = json.map((item) => {
-          const date = new Date(item.Timestamp);
+          const sourceDate = parseDateOnly(item.Timestamp);
+          const date = rollingRange
+            ? addDays(
+                rollingRange.targetStart,
+                diffDays(rollingRange.sourceStart, sourceDate)
+              )
+            : sourceDate;
+          const timestamp = formatDate(date);
 
           return {
-            time: item.Timestamp,
+            time: timestamp,
 
             // label siap pakai untuk chart (NO new Date() di render)
-            dayLabel: `${date.getDate()}/${date.getMonth() + 1}`,
+            dayLabel: dayLabel(date),
 
             // numeric timestamp (untuk sorting / future zoom)
             ts: date.getTime(),
@@ -830,7 +903,7 @@ PM2.5 ≤ 35 µg/m³
 
         setAllData(mapped);
         setChartData(mapped);
-        setLiveData(mapped[0] ?? null);
+        setLiveData(mapped.at(-1) ?? null);
       })
       .catch((err) => {
         console.error("Error loading broiler data:", err);
@@ -1025,6 +1098,13 @@ PM2.5 ≤ 35 µg/m³
     return consumptions.filter((c) => c.zone === selectedZone);
   }, [consumptions, selectedZone]);
 
+  const consumptionStartDate = useMemo(() => {
+    return consumptions.reduce(
+      (earliest, item) => (item.date < earliest ? item.date : earliest),
+      consumptions[0]?.date ?? formatDate(getDemoWindowStart())
+    );
+  }, [consumptions]);
+
   const consumptionChartData = useMemo(() => {
     if (isAllZone) {
       // ALL ZONE: show all zones
@@ -1032,7 +1112,7 @@ PM2.5 ≤ 35 µg/m³
       
       consumptions.forEach((c) => {
         if (!map.has(c.date)) {
-          const dayNum = Math.ceil((new Date(c.date).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          const dayNum = dateToDayNumber(c.date, consumptionStartDate);
           map.set(c.date, {
             date: c.date,
             A: 0,
@@ -1049,10 +1129,13 @@ PM2.5 ≤ 35 µg/m³
         if (c.zone === "C") row.C = c.feedKg;
       });
 
-      return Array.from(map.values()).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      return Array.from(map.values()).sort((a, b) =>
+        compareDateStrings(a.date, b.date)
+      );
     } else {
       // SINGLE ZONE: show only selected zone
-      const dayNum = (dateStr: string) => Math.ceil((new Date(dateStr).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      const dayNum = (dateStr: string) =>
+        dateToDayNumber(dateStr, consumptionStartDate);
       
       return visibleConsumptions
         .map((c) => ({
@@ -1060,9 +1143,9 @@ PM2.5 ≤ 35 µg/m³
           feedKg: c.feedKg,
           stdFeedKg: standardFeedKg(dayNum(c.date)),
         }))
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        .sort((a, b) => compareDateStrings(a.date, b.date));
     }
-  }, [consumptions, visibleConsumptions, isAllZone]);
+  }, [consumptions, consumptionStartDate, visibleConsumptions, isAllZone]);
 
   const consumptionWaterChartData = useMemo(() => {
     if (isAllZone) {
@@ -1071,7 +1154,7 @@ PM2.5 ≤ 35 µg/m³
       
       consumptions.forEach((c) => {
         if (!map.has(c.date)) {
-          const dayNum = Math.ceil((new Date(c.date).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+          const dayNum = dateToDayNumber(c.date, consumptionStartDate);
           map.set(c.date, {
             date: c.date,
             A: 0,
@@ -1088,10 +1171,13 @@ PM2.5 ≤ 35 µg/m³
         if (c.zone === "C") row.C = c.waterL;
       });
 
-      return Array.from(map.values()).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      return Array.from(map.values()).sort((a, b) =>
+        compareDateStrings(a.date, b.date)
+      );
     } else {
       // SINGLE ZONE: show only selected zone
-      const dayNum = (dateStr: string) => Math.ceil((new Date(dateStr).getTime() - new Date("2025-07-01").getTime()) / (1000 * 60 * 60 * 24)) + 1;
+      const dayNum = (dateStr: string) =>
+        dateToDayNumber(dateStr, consumptionStartDate);
       
       return visibleConsumptions
         .map((c) => ({
@@ -1099,9 +1185,9 @@ PM2.5 ≤ 35 µg/m³
           waterL: c.waterL,
           stdWaterL: standardWaterL(dayNum(c.date)),
         }))
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        .sort((a, b) => compareDateStrings(a.date, b.date));
     }
-  }, [consumptions, visibleConsumptions, isAllZone]);
+  }, [consumptions, consumptionStartDate, visibleConsumptions, isAllZone]);
 
   function summarizeData(data: DataPoint[]) {
     if (data.length === 0) return null;
@@ -2537,7 +2623,7 @@ PM2.5 ≤ 35 µg/m³
                         </tr>
                       ) : (
                         [...consumptions]
-                          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                          .sort((a, b) => compareDateStrings(a.date, b.date))
                           .map((c, i) => (
                             <tr key={`${c.date}-${c.zone}-${i}`} className="border-t">
                               <td className="py-2 px-2">{c.date}</td>
@@ -2561,7 +2647,7 @@ PM2.5 ≤ 35 µg/m³
                         </tr>
                       ) : (
                         [...visibleConsumptions]
-                          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                          .sort((a, b) => compareDateStrings(a.date, b.date))
                           .map((c, i) => (
                             <tr key={`${c.date}-${i}`} className="border-t">
                               <td className="py-2 px-2">{c.date}</td>
