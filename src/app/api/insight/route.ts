@@ -30,7 +30,8 @@ export async function POST(req: Request) {
         messages: [
           {
             role: "system",
-            content: "You are an AI analyst for poultry monitoring.",
+            content:
+              "You are a poultry-monitoring decision-support analyst. Use only the supplied context. Treat the AUTHORITATIVE THRESHOLD EVALUATION as fixed: never call an EXCEEDED value within threshold. Do not invent measurements, diagnose disease, or prescribe medication. Give practical operational checks, state uncertainty, and recommend qualified farm or veterinary review for unusual health findings.",
           },
           { role: "user", content: context + "\n\n" + prompt },
         ],

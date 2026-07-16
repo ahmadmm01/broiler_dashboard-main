@@ -1,0 +1,198 @@
+import {
+  dateToDayNumber,
+  formatDate,
+  getDemoWindowStart,
+} from "./dateUtils";
+import { summarizeData } from "./sensorData";
+import { countSensorAlertEpisodes } from "./alertRules";
+import type {
+  AlertEvent,
+  ConsumptionEntry,
+  DataPoint,
+  MortalityEntry,
+  ProductionCycle,
+  WeightEntry,
+  Zone,
+} from "./types";
+
+export type SensorHealthSummary = {
+  status: "Healthy" | "Review Required";
+  completeness: number;
+  expectedRecords: number;
+  receivedRecords: number;
+  largestGapHours: number;
+  issueCount: number;
+};
+
+export type HarvestSummary = {
+  cycleDay: number;
+  totalMortality: number;
+  mortalityRate: number;
+  survivingBirds: number;
+  harvestedBirds: number;
+  finalAverageWeightKg: number;
+  weightVariancePercent: number;
+  totalLiveWeightKg: number;
+  totalFeedPerBirdKg: number;
+  totalWaterPerBirdL: number;
+  estimatedFeedKg: number;
+  estimatedWaterL: number;
+  fcr: number;
+  waterFeedRatio: number;
+  averageDailyGainGram: number;
+  alertCount: number;
+  sensorHealth: SensorHealthSummary;
+};
+
+export function createDemoProductionCycle(): ProductionCycle {
+  const startDate = formatDate(getDemoWindowStart());
+  const startedAt = `${startDate}T00:00:00.000Z`;
+
+  return {
+    id: `CYCLE-ACTIVE-${startDate.replaceAll("-", "")}`,
+    houseName: "Poultry House 1",
+    startDate,
+    targetHarvestDay: 37,
+    initialBirds: 5000,
+    initialAverageWeightKg: 0.044,
+    harvestedBirds: 0,
+    notes: "Pilot cycle prepared for operational review.",
+    status: "active",
+    createdAt: startedAt,
+    updatedAt: startedAt,
+    revision: 1,
+    auditLog: [
+      {
+        id: `started-${startedAt}`,
+        type: "started",
+        timestamp: startedAt,
+        reason: "Demo production cycle initialized.",
+      },
+    ],
+  };
+}
+
+export function calculateSensorHealth(
+  data: DataPoint[],
+  targetHarvestDay: number
+): SensorHealthSummary {
+  const expectedRecords = Math.max(1, targetHarvestDay * 4);
+  const receivedRecords = data.length;
+  const completeness = Math.min(100, (receivedRecords / expectedRecords) * 100);
+  const gaps = data
+    .slice(1)
+    .map((point, index) => (point.ts - data[index].ts) / (60 * 60 * 1000));
+  const largestGapHours = gaps.length ? Math.max(...gaps) : 0;
+  const issueCount = Number(completeness < 95) + Number(largestGapHours > 12);
+
+  return {
+    status: issueCount ? "Review Required" : "Healthy",
+    completeness,
+    expectedRecords,
+    receivedRecords,
+    largestGapHours,
+    issueCount,
+  };
+}
+
+export function calculateHarvestSummary({
+  cycle,
+  mortality,
+  consumptions,
+  weights,
+  sensorData,
+  alerts,
+  zone,
+}: {
+  cycle: ProductionCycle;
+  mortality: MortalityEntry[];
+  consumptions: ConsumptionEntry[];
+  weights: WeightEntry[];
+  sensorData: DataPoint[];
+  alerts: AlertEvent[];
+  zone: Zone;
+}): HarvestSummary {
+  const houseMortality = mortality.filter((entry) => entry.zone === zone);
+  const houseConsumptions = consumptions.filter((entry) => entry.zone === zone);
+  const houseWeights = weights
+    .filter((entry) => entry.zone === zone)
+    .sort((a, b) => a.day - b.day);
+  const finalWeight = houseWeights.at(-1);
+  const latestSensorDate = sensorData.at(-1)?.time.slice(0, 10);
+  const sensorCycleDay = latestSensorDate
+    ? dateToDayNumber(latestSensorDate, cycle.startDate)
+    : 0;
+  const cycleDay = Math.max(1, finalWeight?.day ?? 0, sensorCycleDay);
+  const totalMortality = houseMortality.reduce((sum, entry) => sum + entry.count, 0);
+  const survivingBirds = Math.max(0, cycle.initialBirds - totalMortality);
+  const harvestedBirds = cycle.harvestedBirds > 0
+    ? cycle.harvestedBirds
+    : survivingBirds;
+  const totalFeedPerBirdKg = houseConsumptions.reduce(
+    (sum, entry) => sum + entry.feedKg,
+    0
+  );
+  const totalWaterPerBirdL = houseConsumptions.reduce(
+    (sum, entry) => sum + entry.waterL,
+    0
+  );
+  const finalAverageWeightKg = finalWeight?.actualWeightKg ?? 0;
+  const standardWeightKg = finalWeight?.stdWeightKg ?? 0;
+  const weightGainKg = Math.max(
+    0,
+    finalAverageWeightKg - cycle.initialAverageWeightKg
+  );
+  const averageBirds = (cycle.initialBirds + survivingBirds) / 2;
+
+  return {
+    cycleDay,
+    totalMortality,
+    mortalityRate: cycle.initialBirds
+      ? (totalMortality / cycle.initialBirds) * 100
+      : 0,
+    survivingBirds,
+    harvestedBirds,
+    finalAverageWeightKg,
+    weightVariancePercent: standardWeightKg
+      ? ((finalAverageWeightKg - standardWeightKg) / standardWeightKg) * 100
+      : 0,
+    totalLiveWeightKg: harvestedBirds * finalAverageWeightKg,
+    totalFeedPerBirdKg,
+    totalWaterPerBirdL,
+    estimatedFeedKg: totalFeedPerBirdKg * averageBirds,
+    estimatedWaterL: totalWaterPerBirdL * averageBirds,
+    fcr: finalAverageWeightKg ? totalFeedPerBirdKg / finalAverageWeightKg : 0,
+    waterFeedRatio: totalFeedPerBirdKg
+      ? totalWaterPerBirdL / totalFeedPerBirdKg
+      : 0,
+    averageDailyGainGram: cycleDay
+      ? (weightGainKg * 1000) / cycleDay
+      : 0,
+    alertCount: Math.max(alerts.length, countSensorAlertEpisodes(sensorData)),
+    sensorHealth: calculateSensorHealth(sensorData, cycleDay),
+  };
+}
+
+export function buildDeterministicCycleSummary(
+  cycle: ProductionCycle,
+  harvest: HarvestSummary,
+  sensorData: DataPoint[]
+) {
+  const sensor = summarizeData(sensorData);
+  const observations: string[] = [];
+  if (harvest.mortalityRate > 3) {
+    observations.push("Mortality requires review against the farm target.");
+  } else {
+    observations.push("Mortality remains controlled for the recorded cycle.");
+  }
+  if (harvest.weightVariancePercent < -5) {
+    observations.push("Final average weight is below the configured standard.");
+  } else {
+    observations.push("Final average weight is close to or above the configured standard.");
+  }
+  if (harvest.sensorHealth.issueCount) {
+    observations.push("Sensor completeness or sampling gaps require verification.");
+  }
+
+  return `# Cycle Summary\n${cycle.houseName} completed a ${harvest.cycleDay}-day review with ${harvest.survivingBirds.toLocaleString()} birds remaining and ${harvest.mortalityRate.toFixed(2)}% recorded mortality.\n\n# Key Observations\n- ${observations.join("\n- ")}\n- Average temperature was ${sensor?.temp.avg.toFixed(2) ?? "-"} °C and average CO₂ was ${sensor?.co2.avg.toFixed(0) ?? "-"} ppm.\n- ${harvest.alertCount} alert events were recorded.\n\n# Possible Causes\nEnvironmental peaks, ventilation performance, litter moisture, feed intake, and sensor availability should be reviewed together before assigning a single cause.\n\n# Recommended Actions\n- Review alert periods against CCTV and daily farm notes.\n- Verify ventilation, cooling, litter condition, feed delivery, and water availability.\n- Confirm final bird count and weight before signing the harvest report.\n- Treat this summary as decision support and confirm findings through physical inspection.`;
+}

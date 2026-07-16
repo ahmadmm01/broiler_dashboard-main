@@ -8,26 +8,58 @@ import {
 } from "./lib/demoData";
 import {
   addDays,
-  compareDateStrings,
-  DAY_MS,
   dateToDayNumber,
   formatDate,
-  getDemoWindowStart,
+  formatDateTime,
 } from "./lib/dateUtils";
 import { createZoneData, getZonePoint, summarizeData } from "./lib/sensorData";
+import {
+  createHistoricalCycles,
+  type HistoricalCycle,
+  type HistoricalProductionData,
+} from "./lib/historicalCycles";
 import type {
+  AlertEvent,
   ConsumptionEntry,
   DataPoint,
   LiveCard,
   MortalityEntry,
-  MortalitySummaryRow,
+  ProductionCycle,
   SensorApiResponse,
+  SensorMetric,
   WeightEntry,
   Zone,
 } from "./lib/types";
 import { usePersistentState } from "./lib/usePersistentState";
+import CameraFeed from "./components/CameraFeed";
+import DailyProductionLog, {
+  type DailyProductionLogInput,
+} from "./components/DailyProductionLog";
+import NotificationCenter from "./components/NotificationCenter";
+import ProductionCyclePanel from "./components/ProductionCyclePanel";
+import CurrentCyclePrediction from "./components/CurrentCyclePrediction";
+import CurrentCycleSensorTrends from "./components/CurrentCycleSensorTrends";
+import HistoricalCycleAiAnalysis from "./components/HistoricalCycleAiAnalysis";
+import HistoricalProductionOverview from "./components/HistoricalProductionOverview";
+import ProductionPerformanceCharts from "./components/ProductionPerformanceCharts";
+import { getSensorAlertConditions } from "./lib/alertRules";
+import {
+  buildDeterministicCycleSummary,
+  calculateHarvestSummary,
+  createDemoProductionCycle,
+} from "./lib/cycleAnalytics";
+import {
+  buildHistoricalCycleSnapshot,
+  completeProductionCycle,
+  normalizeProductionCycle,
+  reopenProductionCycle,
+  startProductionCycle,
+  updateProductionCycle,
+  type CompleteCycleInput,
+  type StartCycleInput,
+} from "./lib/cycleLifecycle";
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LineChart,
   Line,
@@ -39,16 +71,37 @@ import {
   CartesianGrid,
   ScatterChart,
   Scatter,
-  BarChart,
-  Bar,
 } from "recharts";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 
 // ========= Helpers =========
 
-const clamp = (v: number, lo: number, hi: number) =>
-  Math.min(Math.max(v, lo), hi);
+const configuredReplayInterval = Number(
+  process.env.NEXT_PUBLIC_SENSOR_REPLAY_INTERVAL_MS ?? 15_000
+);
+const REALTIME_INTERVAL_MS =
+  Number.isFinite(configuredReplayInterval) && configuredReplayInterval >= 5_000
+    ? configuredReplayInterval
+    : 15_000;
+const LIVE_REPLAY_TAIL_POINTS = 24;
+const ALL_ZONES: Zone[] = ["A", "B", "C"];
+const configuredZones = (process.env.NEXT_PUBLIC_ACTIVE_ZONES ?? "A,B,C")
+  .split(",")
+  .map((zone) => zone.trim().toUpperCase())
+  .filter((zone): zone is Zone => ALL_ZONES.includes(zone as Zone));
+const ACTIVE_ZONES: Zone[] = Array.from(new Set(configuredZones));
+if (ACTIVE_ZONES.length === 0) ACTIVE_ZONES.push(...ALL_ZONES);
+const IS_SINGLE_ZONE = ACTIVE_ZONES.length === 1;
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 type SelectableZone = "ALL" | Zone;
 type AggregationMode = "all" | "daily" | "weekly" | "monthly";
@@ -59,37 +112,14 @@ type TrendDatum = {
   [key: string]: number | string | undefined;
 };
 
-const ACTIVITY_ZONE_ADJUSTMENT: Record<SelectableZone, number> = {
-  ALL: 0,
-  A: 2,
-  B: -18,
-  C: -50,
-};
+function dedupeAlertsById(alerts: AlertEvent[]) {
+  const seenIds = new Set<string>();
 
-function calculateActivityScore(data: DataPoint[], zone: SelectableZone) {
-  const latest = data.at(-1);
-  if (!latest) return 50;
-
-  const tempPenalty = clamp(Math.abs(latest.temp - 28) * 3, 0, 40);
-  const humiPenalty = clamp(Math.abs(latest.humidity - 65) * 0.8, 0, 25);
-  return clamp(
-    90 - tempPenalty - humiPenalty + ACTIVITY_ZONE_ADJUSTMENT[zone],
-    5,
-    95
-  );
-}
-
-function getAbnormalReason(latest: DataPoint | undefined, activityScore: number) {
-  if (!latest) return "Insufficient data";
-
-  const reasons: string[] = [];
-  if (latest.temp > 32) reasons.push("High temperature");
-  if (latest.co2 > 1200) reasons.push("High CO₂");
-  if (latest.nh3 > 5) reasons.push("High NH₃");
-  if (latest.pm25 > 35) reasons.push("High PM2.5");
-  if (activityScore < 35) reasons.push("Low movement");
-
-  return reasons.length ? reasons.join(", ") : "Normal";
+  return alerts.filter((alert) => {
+    if (seenIds.has(alert.id)) return false;
+    seenIds.add(alert.id);
+    return true;
+  });
 }
 
 function readingClass(label: string, value: number, limit: number) {
@@ -99,16 +129,89 @@ function readingClass(label: string, value: number, limit: number) {
   return "text-red-600";
 }
 
-const formatTrendTick = (value: number | string) => {
-  const date = new Date(Number(value));
-  if (Number.isNaN(date.getTime())) return String(value);
-  return `${date.getDate()}/${date.getMonth() + 1}`;
+const aggregationDescriptions: Record<AggregationMode, string> = {
+  all: "Every stored 6-hour reading is shown.",
+  daily: "Average of all readings for each calendar date.",
+  weekly: "Average of available readings in each Monday–Sunday calendar week.",
+  monthly: "Average of all readings for each calendar month.",
 };
 
-const formatTrendTooltipLabel = (value: number | string) => {
+function getTrendPeriodStart(date: Date, mode: AggregationMode) {
+  if (mode === "all") return new Date(date);
+
+  const periodStart = new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate()
+  );
+
+  if (mode === "weekly") {
+    const daysSinceMonday = (periodStart.getDay() + 6) % 7;
+    periodStart.setDate(periodStart.getDate() - daysSinceMonday);
+  }
+
+  if (mode === "monthly") {
+    periodStart.setDate(1);
+  }
+
+  return periodStart;
+}
+
+const formatTrendTick = (
+  value: number | string,
+  mode: AggregationMode
+) => {
   const date = new Date(Number(value));
   if (Number.isNaN(date.getTime())) return String(value);
-  return formatDate(date);
+
+  if (mode === "daily") {
+    return `${String(date.getDate()).padStart(2, "0")}/${String(
+      date.getMonth() + 1
+    ).padStart(2, "0")}/${date.getFullYear()}`;
+  }
+
+  if (mode === "weekly") {
+    const weekEnd = addDays(date, 6);
+    const shortDate = (item: Date) =>
+      `${String(item.getDate()).padStart(2, "0")}/${String(
+        item.getMonth() + 1
+      ).padStart(2, "0")}`;
+    return `${shortDate(date)}–${shortDate(weekEnd)}`;
+  }
+
+  if (mode === "monthly") {
+    return new Intl.DateTimeFormat("en-GB", {
+      month: "short",
+      year: "numeric",
+    }).format(date);
+  }
+
+  return `${String(date.getDate()).padStart(2, "0")}/${String(
+    date.getMonth() + 1
+  ).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(
+    date.getMinutes()
+  ).padStart(2, "0")}`;
+};
+
+const formatTrendTooltipLabel = (
+  value: number | string,
+  mode: AggregationMode
+) => {
+  const date = new Date(Number(value));
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  if (mode === "daily") return formatDate(date);
+  if (mode === "weekly") {
+    return `Week: ${formatDate(date)} – ${formatDate(addDays(date, 6))}`;
+  }
+  if (mode === "monthly") {
+    return `Month: ${new Intl.DateTimeFormat("en-GB", {
+      month: "long",
+      year: "numeric",
+    }).format(date)}`;
+  }
+
+  return formatDateTime(date);
 };
 
 const trendCursor = { stroke: "#94a3b8", strokeWidth: 1 };
@@ -120,22 +223,16 @@ function aggregateTrendRecords<T extends TrendDatum>(
 ): T[] {
   if (mode === "all" || data.length === 0) return data;
 
-  const firstTs = data[0].ts;
-  const groups = new Map<string, T[]>();
+  const groups = new Map<number, T[]>();
 
   data.forEach((item) => {
-    const date = new Date(item.ts);
-    const key =
-      mode === "daily"
-        ? formatDate(date)
-        : mode === "weekly"
-          ? `week-${Math.floor((item.ts - firstTs) / (7 * DAY_MS))}`
-          : `month-${date.getFullYear()}-${date.getMonth()}`;
+    const periodStart = getTrendPeriodStart(new Date(item.ts), mode);
+    const key = periodStart.getTime();
 
     groups.set(key, [...(groups.get(key) ?? []), item]);
   });
 
-  return Array.from(groups.values()).map((items) => {
+  return Array.from(groups.entries()).map(([periodStartTs, items]) => {
     const first = items[0];
     const averaged: TrendDatum = { ...first };
 
@@ -153,9 +250,9 @@ function aggregateTrendRecords<T extends TrendDatum>(
       }
     });
 
-    averaged.ts = first.ts;
-    averaged.time = formatDate(new Date(first.ts));
-    averaged.dayLabel = formatTrendTick(first.ts);
+    averaged.ts = periodStartTs;
+    averaged.time = formatTrendTooltipLabel(periodStartTs, mode);
+    averaged.dayLabel = formatTrendTick(periodStartTs, mode);
     return averaged as T;
   });
 }
@@ -428,16 +525,6 @@ function buildZoneReportSection(
   `;
 }
 
-// Dummy standar kurva (silakan ganti sesuai standarmu)
-function standardFeedKg(day: number): number {
-  const base = 0.05;
-  const inc = 0.015;
-  return +(base + inc * Math.pow(day, 1.15)).toFixed(3);
-}
-function standardWaterL(day: number): number {
-  return +(standardFeedKg(day) * 2.2).toFixed(3);
-}
-
 const zoneLegendConfig = {
   A: { label: "Zone A", dot: "bg-red-500", text: "text-red-500" },
   B: { label: "Zone B", dot: "bg-blue-500", text: "text-blue-500" },
@@ -533,31 +620,60 @@ function CardItem({ item }: CardItemProps) {
 export default function DashboardPage() {
   // ====== Sensor data ======
   const [allData, setAllData] = useState<DataPoint[]>([]);
-  const [data, setData] = useState<DataPoint[]>([]);
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
   const [weights, setWeights] = usePersistentState<WeightEntry[]>(
-    "broiler-dashboard:v3:weights",
+    "broiler-dashboard:v6:weights",
     createDemoWeightEntries
   );
-  const [weightDay, setWeightDay] = useState<number>(31);
-  const [actualWeight, setActualWeight] = useState<number>(0);
   // ====== Health & Behavior (prototype) ======
   // Mortality
   const [mortality, setMortality] = usePersistentState<MortalityEntry[]>(
-    "broiler-dashboard:v3:mortality",
+    "broiler-dashboard:v6:mortality",
     createDemoMortalityEntries
   );
-
-  const [mortDate, setMortDate] = useState<string>(() =>
-    formatDate(new Date())
+  const [storedCycle, setCycle] = usePersistentState<ProductionCycle>(
+    "broiler-dashboard:v6:production-cycle",
+    createDemoProductionCycle
   );
-  const [mortCount, setMortCount] = useState<number>(0);
-  const [mortNotes, setMortNotes] = useState<string>("");
+  const cycle = useMemo(
+    () => normalizeProductionCycle(storedCycle),
+    [storedCycle]
+  );
+  useEffect(() => {
+    if (
+      !storedCycle.status ||
+      !storedCycle.createdAt ||
+      !storedCycle.updatedAt ||
+      !Array.isArray(storedCycle.auditLog) ||
+      storedCycle.id !== cycle.id
+    ) {
+      setCycle((current) => normalizeProductionCycle(current));
+    }
+  }, [cycle.id, setCycle, storedCycle]);
+  const [alerts, setAlerts] = usePersistentState<AlertEvent[]>(
+    "broiler-dashboard:v6:alerts",
+    () => []
+  );
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [latestToast, setLatestToast] = useState<AlertEvent | null>(null);
+  const alertFlagsRef = useRef<Record<SensorMetric, boolean>>({
+    temp: false,
+    humidity: false,
+    co2: false,
+    nh3: false,
+    pm25: false,
+  });
 
   // ===== AI Insight =====
-  const [selectedInsight, setSelectedInsight] = useState<string>("overall");
+  const [selectedInsight, setSelectedInsight] = useState<string>("cycle");
   const [aiInsight, setAiInsight] = useState<string>("");
+  const [aiInsightSignature, setAiInsightSignature] = useState<string | null>(
+    null
+  );
+  const [requestedInsightSignature, setRequestedInsightSignature] = useState<
+    string | null
+  >(null);
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const INSIGHT_OPTIONS = [
@@ -575,16 +691,16 @@ Output format:
 `,
     },
     {
-      value: "zone",
-      label: "Zone Performance Comparison",
+      value: "cycle",
+      label: "End-of-Cycle Harvest Review",
       prompt: `
-Analyze and compare environmental conditions between zones.
+Analyze the complete broiler production cycle and harvest readiness.
 
 Output format:
-1. Best Performing Zone
-2. Underperforming Zone
-3. Key Differences
-4. Actionable Recommendations
+1. Cycle Summary
+2. Production and Environmental Findings
+3. Possible Causes and Risks
+4. Priority Actions Before Sign-off
 `,
     },
     {
@@ -628,14 +744,33 @@ Output format:
     },
   ];
   const buildInsightContext = () => {
-    const summary = summarizeData(aggregatedData);
+    const summary = summarizeData(reportDataset);
     if (!summary) return "";
 
     return `
 DATA CONTEXT:
-- Zone: ${selectedZone}
-- Aggregation: ${appliedAggregation}
-- Data Points: ${aggregatedData.length}
+- House: ${cycle.houseName}
+- Zone: ${reportZone}
+- Cycle ID: ${cycle.id}
+- Lifecycle Status: ${cycle.status}
+- Revision: ${cycle.revision}
+- Actual Harvest Date: ${cycle.actualHarvestDate ?? "Not completed"}
+- Current Cycle Day: ${harvestSummary.cycleDay}
+- Ideal Cycle Length: ${cycle.targetHarvestDay} days
+- Data Points: ${reportDataset.length}
+
+PRODUCTION CONTEXT:
+- Birds Placed: ${cycle.initialBirds}
+- Recorded Mortality: ${harvestSummary.totalMortality}
+- Mortality Rate: ${harvestSummary.mortalityRate.toFixed(2)}%
+- Birds Remaining: ${harvestSummary.survivingBirds}
+- Final Average Weight: ${harvestSummary.finalAverageWeightKg.toFixed(3)} kg
+- Weight Variance vs Configured Standard: ${harvestSummary.weightVariancePercent.toFixed(2)}%
+- Total Feed per Bird: ${harvestSummary.totalFeedPerBirdKg.toFixed(2)} kg
+- Total Water per Bird: ${harvestSummary.totalWaterPerBirdL.toFixed(2)} L
+- Estimated FCR: ${harvestSummary.fcr.toFixed(2)}
+- Alert Events: ${harvestSummary.alertCount}
+- Sensor Completeness: ${harvestSummary.sensorHealth.completeness.toFixed(1)}%
 
 Temperature:
 - Avg: ${summary.temp.avg.toFixed(2)} °C
@@ -664,11 +799,20 @@ Temperature ≤ 32°C
 CO₂ ≤ 1200 ppm
 NH₃ ≤ 5 ppm
 PM2.5 ≤ 35 µg/m³
+
+AUTHORITATIVE THRESHOLD EVALUATION:
+- Temperature Peak: ${summary.temp.max > 32 ? "EXCEEDED" : "WITHIN"} (${summary.temp.max.toFixed(2)} °C vs 32 °C)
+- CO₂ Peak: ${summary.co2.max > 1200 ? "EXCEEDED" : "WITHIN"} (${summary.co2.max.toFixed(0)} ppm vs 1200 ppm)
+- NH₃ Peak: ${summary.nh3.max > 5 ? "EXCEEDED" : "WITHIN"} (${summary.nh3.max.toFixed(2)} ppm vs 5 ppm)
+- PM2.5 Peak: ${summary.pm25.max > 35 ? "EXCEEDED" : "WITHIN"} (${summary.pm25.max.toFixed(2)} µg/m³ vs 35 µg/m³)
 `;
   };
   const generateInsight = async () => {
+    const requestSignature = currentInsightSignature;
+    setRequestedInsightSignature(requestSignature);
     setIsGeneratingInsight(true);
     setAiInsight("");
+    setAiInsightSignature(null);
     setAiError(null);
 
     try {
@@ -693,9 +837,10 @@ PM2.5 ≤ 35 µg/m³
       }
 
       setAiInsight(json.insight);
-    } catch (error) {
+      setAiInsightSignature(requestSignature);
+    } catch {
       setAiError(
-        error instanceof Error ? error.message : "Failed to generate AI insight"
+        "AI enhancement is temporarily unavailable. A verified rule-based summary is shown instead."
       );
     } finally {
       setIsGeneratingInsight(false);
@@ -704,53 +849,121 @@ PM2.5 ≤ 35 µg/m³
 
   // Consumption
   const [consumptions, setConsumptions] = usePersistentState<ConsumptionEntry[]>(
-    "broiler-dashboard:v3:consumptions",
+    "broiler-dashboard:v6:consumptions",
     createDemoConsumptionEntries
   );
-  const [consumpDate, setConsumpDate] = useState<string>(() =>
-    formatDate(addDays(getDemoWindowStart(), 5))
+  const legacyDemoCycleId = `CYCLE-${cycle.startDate.replaceAll("-", "")}`;
+  const activeDemoCycleId = `CYCLE-ACTIVE-${cycle.startDate.replaceAll("-", "")}`;
+
+  useEffect(() => {
+    const shouldScopeToCurrentCycle = (cycleId?: string) =>
+      !cycleId ||
+      (cycle.id === activeDemoCycleId &&
+        cycleId === legacyDemoCycleId);
+
+    if (mortality.some((entry) => shouldScopeToCurrentCycle(entry.cycleId))) {
+      setMortality((previous) =>
+        previous.map((entry) => ({
+          ...entry,
+          cycleId: shouldScopeToCurrentCycle(entry.cycleId)
+            ? cycle.id
+            : entry.cycleId,
+        }))
+      );
+    }
+    if (
+      consumptions.some((entry) => shouldScopeToCurrentCycle(entry.cycleId))
+    ) {
+      setConsumptions((previous) =>
+        previous.map((entry) => ({
+          ...entry,
+          cycleId: shouldScopeToCurrentCycle(entry.cycleId)
+            ? cycle.id
+            : entry.cycleId,
+        }))
+      );
+    }
+    if (weights.some((entry) => shouldScopeToCurrentCycle(entry.cycleId))) {
+      setWeights((previous) =>
+        previous.map((entry) => ({
+          ...entry,
+          cycleId: shouldScopeToCurrentCycle(entry.cycleId)
+            ? cycle.id
+            : entry.cycleId,
+        }))
+      );
+    }
+    const hasAlertsNeedingScope = alerts.some((entry) =>
+      shouldScopeToCurrentCycle(entry.cycleId)
+    );
+    const hasDuplicateAlertIds =
+      new Set(alerts.map((entry) => entry.id)).size !== alerts.length;
+
+    if (hasAlertsNeedingScope || hasDuplicateAlertIds) {
+      setAlerts((previous) =>
+        dedupeAlertsById(
+          previous.map((entry) => ({
+            ...entry,
+            cycleId: shouldScopeToCurrentCycle(entry.cycleId)
+              ? cycle.id
+              : entry.cycleId,
+          }))
+        )
+      );
+    }
+  }, [
+    alerts,
+    activeDemoCycleId,
+    consumptions,
+    cycle.id,
+    legacyDemoCycleId,
+    mortality,
+    setAlerts,
+    setConsumptions,
+    setMortality,
+    setWeights,
+    weights,
+  ]);
+
+  const cycleMortality = useMemo(
+    () =>
+      mortality.filter(
+        (entry) =>
+          entry.cycleId === cycle.id &&
+          entry.date >= cycle.startDate &&
+          (!cycle.actualHarvestDate || entry.date <= cycle.actualHarvestDate)
+      ),
+    [cycle.actualHarvestDate, cycle.id, cycle.startDate, mortality]
   );
-  const [feedInput, setFeedInput] = useState<number>(0.1);
-  const [waterInput, setWaterInput] = useState<number>(0.22);
-
-  const addWeightEntry = () => {
-    if (weightDay <= 0 || actualWeight <= 0 || isAllZone) return;
-
-    const stdWeight = standardBroilerWeight(weightDay);
-
-    setWeights((prev) => {
-      const exists = prev.some((w) => w.day === weightDay && w.zone === selectedZone);
-
-      const next = exists
-        ? prev.map((w) =>
-            w.day === weightDay && w.zone === selectedZone
-              ? { ...w, actualWeightKg: actualWeight }
-              : w
-          )
-        : [
-            ...prev,
-            {
-              zone: selectedZone as "A" | "B" | "C",
-              day: weightDay,
-              stdWeightKg: stdWeight,
-              actualWeightKg: actualWeight,
-            },
-          ];
-
-      return next.sort((a, b) => a.day - b.day || a.zone.localeCompare(b.zone));
-    });
-
-    setWeightDay((d) => d + 1);
-    setActualWeight(0);
-  };
+  const cycleConsumptions = useMemo(
+    () =>
+      consumptions.filter(
+        (entry) =>
+          entry.cycleId === cycle.id &&
+          entry.date >= cycle.startDate &&
+          (!cycle.actualHarvestDate || entry.date <= cycle.actualHarvestDate)
+      ),
+    [consumptions, cycle.actualHarvestDate, cycle.id, cycle.startDate]
+  );
+  const cycleWeights = useMemo(
+    () => weights.filter((entry) => entry.cycleId === cycle.id),
+    [cycle.id, weights]
+  );
+  const cycleAlerts = useMemo(
+    () =>
+      dedupeAlertsById(
+        alerts.filter((entry) => entry.cycleId === cycle.id)
+      ),
+    [alerts, cycle.id]
+  );
 
   // ===== Visualization Controls =====
   // ===== Visualization Controls =====
   const [selectedParam, setSelectedParam] = useState<
     "all" | "temp" | "humidity" | "co2" | "nh3" | "pm25"
   >("all");
-  const [selectedZone, setSelectedZone] = useState<"ALL" | "A" | "B" | "C">(
-    "ALL"
+  const [selectedZone, setSelectedZone] = useState<SelectableZone>(
+    IS_SINGLE_ZONE ? (ACTIVE_ZONES[0] ?? "A") : "ALL"
   );
   const isAllZone = selectedZone === "ALL";
 
@@ -758,21 +971,40 @@ PM2.5 ≤ 35 µg/m³
   const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
 
   const [aggregation, setAggregation] = useState<AggregationMode>("all");
+  const [selectedHistoricalCycleKey, setSelectedHistoricalCycleKey] =
+    useState<HistoricalCycle["key"]>("latest");
+  const [isHistoricalDataOpen, setIsHistoricalDataOpen] = useState(false);
+  const [managedHistoricalCycles, setManagedHistoricalCycles] =
+    usePersistentState<HistoricalCycle[]>(
+      "broiler-dashboard:v7:managed-historical-cycles",
+      () => []
+    );
   // ================= APPLY FILTER STATE =================
   const [appliedParam, setAppliedParam] = useState(selectedParam);
   const [appliedAggregation, setAppliedAggregation] = useState(aggregation);
   const [isApplying, setIsApplying] = useState(false);
 
-  // Vision activity (dummy score)
-  const activityScore = useMemo(() => {
-    return calculateActivityScore(data, selectedZone);
-  }, [data, selectedZone]);
-
-  const abnormalReason = useMemo(() => {
-    return getAbnormalReason(data.at(-1), activityScore);
-  }, [activityScore, data]);
-  // untuk chart (STATIC)
-  const [chartData, setChartData] = useState<DataPoint[]>([]);
+  const historicalCycles = useMemo(() => {
+    const managedIds = new Set(
+      managedHistoricalCycles.map((historicalCycle) => historicalCycle.id)
+    );
+    const seededCycles = createHistoricalCycles().filter(
+      (historicalCycle) => !managedIds.has(historicalCycle.id)
+    );
+    return [...managedHistoricalCycles, ...seededCycles];
+  }, [managedHistoricalCycles]);
+  const selectedHistoricalCycle = useMemo(
+    () =>
+      historicalCycles.find(
+        (historicalCycle) =>
+          historicalCycle.key === selectedHistoricalCycleKey
+      ) ?? historicalCycles[0],
+    [historicalCycles, selectedHistoricalCycleKey]
+  );
+  const chartData = useMemo(
+    () => selectedHistoricalCycle?.data ?? [],
+    [selectedHistoricalCycle]
+  );
   const [sensorMeta, setSensorMeta] = useState<SensorApiResponse["meta"] | null>(
     null
   );
@@ -781,39 +1013,6 @@ PM2.5 ≤ 35 µg/m³
   const zoneData = useMemo(() => {
     return createZoneData(chartData);
   }, [chartData]);
-  const activityByZone = useMemo(
-    () =>
-      (["A", "B", "C"] as const).map((zone) => {
-        const score = calculateActivityScore(zoneData[zone], zone);
-        return {
-          zone,
-          score,
-          reason: getAbnormalReason(zoneData[zone].at(-1), score),
-        };
-      }),
-    [zoneData]
-  );
-  const mortalitySummaryByDate = useMemo<MortalitySummaryRow[]>(() => {
-    if (selectedZone !== "ALL") return [];
-
-    const map = new Map<string, MortalitySummaryRow>();
-
-    mortality.forEach((m) => {
-      if (!map.has(m.date)) {
-        map.set(m.date, {
-          date: m.date,
-          A: 0,
-          B: 0,
-          C: 0,
-        });
-      }
-      map.get(m.date)![m.zone] += m.count;
-    });
-
-    return Array.from(map.values()).sort((a, b) =>
-      a.date.localeCompare(b.date)
-    );
-  }, [mortality, selectedZone]);
   // =====================================================
   // ✅ TARUH aggregatedData DI SINI (WAJIB DI SINI)
   // =====================================================
@@ -840,11 +1039,11 @@ PM2.5 ≤ 35 µg/m³
       aggregateTrendRecords(data, appliedAggregation);
 
     if (selectedZone === "ALL") {
-      return [
-        { zone: "A", color: ZONE_COLORS.A, data: applyAgg(zoneData.A) },
-        { zone: "B", color: ZONE_COLORS.B, data: applyAgg(zoneData.B) },
-        { zone: "C", color: ZONE_COLORS.C, data: applyAgg(zoneData.C) },
-      ];
+      return ACTIVE_ZONES.map((zone) => ({
+        zone,
+        color: ZONE_COLORS[zone],
+        data: applyAgg(zoneData[zone]),
+      }));
     }
 
     return [
@@ -862,8 +1061,12 @@ PM2.5 ≤ 35 µg/m³
     if (allData.length === 0) return;
 
     const interval = setInterval(() => {
-      setLiveIndex((prev) => (prev < allData.length - 1 ? prev + 1 : 0));
-    }, 10000); // ganti tiap 10 detik
+      setLiveIndex((prev) =>
+        prev < allData.length - 1
+          ? prev + 1
+          : Math.max(0, allData.length - LIVE_REPLAY_TAIL_POINTS)
+      );
+    }, REALTIME_INTERVAL_MS);
 
     return () => clearInterval(interval);
   }, [allData]);
@@ -893,10 +1096,13 @@ PM2.5 ≤ 35 µg/m³
         if (!isMounted) return;
 
         const mapped = payload.data;
+        const initialIndex = Math.max(
+          0,
+          mapped.length - LIVE_REPLAY_TAIL_POINTS
+        );
         setAllData(mapped);
-        setChartData(mapped);
-        setLiveData(mapped.at(-1) ?? null);
-        setLiveIndex(Math.max(0, mapped.length - 1));
+        setLiveData(mapped[initialIndex] ?? null);
+        setLiveIndex(Math.max(0, initialIndex));
         setSensorMeta(payload.meta);
         setSensorError(null);
       })
@@ -911,18 +1117,90 @@ PM2.5 ≤ 35 µg/m³
   }, []);
 
   useEffect(() => {
-    if (selectedZone === "ALL") {
-      setData(allData);
-    } else {
-      setData(zoneData[selectedZone]);
-    }
-  }, [selectedZone, allData, zoneData]);
-
-  // ====== Loop realtime (6 titik) ======
-  useEffect(() => {
     if (allData.length === 0) return;
-    setData(allData); // tampilkan SEMUA data sekaligus
-  }, [allData]);
+    const current = allData[liveIndex];
+    if (!current) return;
+
+    setLiveData(current);
+  }, [allData, liveIndex]);
+
+  useEffect(() => {
+    if (!livePoint || cycle.status !== "active") return;
+
+    const conditions = getSensorAlertConditions(livePoint);
+    const nextFlags = { ...alertFlagsRef.current };
+    const newAlerts: AlertEvent[] = [];
+    const resolvedMetrics: SensorMetric[] = [];
+
+    conditions.forEach((condition) => {
+      const isAbove = condition.value > condition.threshold;
+      const wasAbove = alertFlagsRef.current[condition.metric];
+
+      if (isAbove && !wasAbove) {
+        newAlerts.push({
+          id: `${cycle.id}-${condition.metric}-${livePoint.ts}`,
+          cycleId: cycle.id,
+          metric: condition.metric,
+          label: condition.label,
+          timestamp: livePoint.time,
+          value: condition.value,
+          threshold: condition.threshold,
+          unit: condition.unit,
+          severity:
+            condition.value >= condition.criticalThreshold
+              ? "critical"
+              : "warning",
+          status: "active",
+          message: `${condition.label} crossed its configured limit. ${condition.action}`,
+        });
+      }
+
+      if (!isAbove && wasAbove) resolvedMetrics.push(condition.metric);
+      nextFlags[condition.metric] = isAbove;
+    });
+
+    alertFlagsRef.current = nextFlags;
+    const existingAlertIds = new Set(alerts.map((alert) => alert.id));
+    const uniqueNewAlerts = newAlerts.filter(
+      (alert) => !existingAlertIds.has(alert.id)
+    );
+
+    if (uniqueNewAlerts.length || resolvedMetrics.length) {
+      setAlerts((previous) => {
+        const resolved = previous.map((alert) =>
+          alert.cycleId === cycle.id &&
+          resolvedMetrics.includes(alert.metric) &&
+          alert.status !== "resolved"
+            ? { ...alert, status: "resolved" as const }
+            : alert
+        );
+        return dedupeAlertsById([...uniqueNewAlerts, ...resolved]).slice(0, 100);
+      });
+    }
+
+    if (uniqueNewAlerts.length) {
+      setLatestToast(uniqueNewAlerts[0]);
+      if (soundEnabled) {
+        void new Audio("/sound/alert.mp3").play().catch(() => undefined);
+      }
+    }
+  }, [alerts, cycle.id, cycle.status, livePoint, setAlerts, soundEnabled]);
+
+  useEffect(() => {
+    if (!latestToast) return;
+    const timeout = window.setTimeout(() => setLatestToast(null), 6000);
+    return () => window.clearTimeout(timeout);
+  }, [latestToast]);
+
+  const acknowledgeAlert = (id: string) => {
+    setAlerts((previous) =>
+      previous.map((alert) =>
+        alert.id === id && alert.status === "active"
+          ? { ...alert, status: "acknowledged" }
+          : alert
+      )
+    );
+  };
 
   // ==== SAFE derivations tanpa early-return ====
   const liveByZone = useMemo(() => {
@@ -990,10 +1268,8 @@ PM2.5 ≤ 35 µg/m³
   // ===== Latest safe data (ANTI ERROR) =====
   const zoneLatest = useMemo(() => {
     if (selectedZone === "ALL") return liveData;
-
-    const zData = zoneData[selectedZone];
-    return zData && zData.length > 0 ? zData[zData.length - 1] : liveData;
-  }, [selectedZone, liveData, zoneData]);
+    return liveZoneData?.[selectedZone] ?? liveData;
+  }, [selectedZone, liveData, liveZoneData]);
 
   const latestSafe: DataPoint = zoneLatest ?? {
     time: "-",
@@ -1045,197 +1321,297 @@ PM2.5 ≤ 35 µg/m³
   );
 
   const visibleConsumptions = useMemo(() => {
-    if (selectedZone === "ALL") return consumptions;
-    return consumptions.filter((c) => c.zone === selectedZone);
-  }, [consumptions, selectedZone]);
+    if (selectedZone === "ALL") return cycleConsumptions;
+    return cycleConsumptions.filter((c) => c.zone === selectedZone);
+  }, [cycleConsumptions, selectedZone]);
 
-  const consumptionStartDate = useMemo(() => {
-    return consumptions.reduce(
-      (earliest, item) => (item.date < earliest ? item.date : earliest),
-      consumptions[0]?.date ?? formatDate(getDemoWindowStart())
-    );
-  }, [consumptions]);
-
-  const consumptionChartData = useMemo(() => {
-    if (isAllZone) {
-      // ALL ZONE: show all zones
-      const map = new Map<string, { date: string; A: number; B: number; C: number; stdA: number; stdB: number; stdC: number }>();
-      
-      consumptions.forEach((c) => {
-        if (!map.has(c.date)) {
-          const dayNum = dateToDayNumber(c.date, consumptionStartDate);
-          map.set(c.date, {
-            date: c.date,
-            A: 0,
-            B: 0,
-            C: 0,
-            stdA: standardFeedKg(dayNum),
-            stdB: standardFeedKg(dayNum),
-            stdC: standardFeedKg(dayNum),
-          });
-        }
-        const row = map.get(c.date)!;
-        if (c.zone === "A") row.A = c.feedKg;
-        if (c.zone === "B") row.B = c.feedKg;
-        if (c.zone === "C") row.C = c.feedKg;
-      });
-
-      return Array.from(map.values()).sort((a, b) =>
-        compareDateStrings(a.date, b.date)
-      );
-    } else {
-      // SINGLE ZONE: show only selected zone
-      const dayNum = (dateStr: string) =>
-        dateToDayNumber(dateStr, consumptionStartDate);
-      
-      return visibleConsumptions
-        .map((c) => ({
-          date: c.date,
-          feedKg: c.feedKg,
-          stdFeedKg: standardFeedKg(dayNum(c.date)),
-        }))
-        .sort((a, b) => compareDateStrings(a.date, b.date));
-    }
-  }, [consumptions, consumptionStartDate, visibleConsumptions, isAllZone]);
-
-  const consumptionWaterChartData = useMemo(() => {
-    if (isAllZone) {
-      // ALL ZONE: show all zones
-      const map = new Map<string, { date: string; A: number; B: number; C: number; stdA: number; stdB: number; stdC: number }>();
-      
-      consumptions.forEach((c) => {
-        if (!map.has(c.date)) {
-          const dayNum = dateToDayNumber(c.date, consumptionStartDate);
-          map.set(c.date, {
-            date: c.date,
-            A: 0,
-            B: 0,
-            C: 0,
-            stdA: standardWaterL(dayNum),
-            stdB: standardWaterL(dayNum),
-            stdC: standardWaterL(dayNum),
-          });
-        }
-        const row = map.get(c.date)!;
-        if (c.zone === "A") row.A = c.waterL;
-        if (c.zone === "B") row.B = c.waterL;
-        if (c.zone === "C") row.C = c.waterL;
-      });
-
-      return Array.from(map.values()).sort((a, b) =>
-        compareDateStrings(a.date, b.date)
-      );
-    } else {
-      // SINGLE ZONE: show only selected zone
-      const dayNum = (dateStr: string) =>
-        dateToDayNumber(dateStr, consumptionStartDate);
-      
-      return visibleConsumptions
-        .map((c) => ({
-          date: c.date,
-          waterL: c.waterL,
-          stdWaterL: standardWaterL(dayNum(c.date)),
-        }))
-        .sort((a, b) => compareDateStrings(a.date, b.date));
-    }
-  }, [consumptions, consumptionStartDate, visibleConsumptions, isAllZone]);
-
-  // ====== Handlers ======
-  const addMortality = () => {
-    if (isAllZone) return; // HARD BLOCK
-    if (!mortDate || Number.isNaN(mortCount)) return;
-
-    setMortality((prev) => [
-      ...prev,
-      {
-        zone: selectedZone as "A" | "B" | "C",
-        date: mortDate,
-        count: mortCount,
-        notes: mortNotes || undefined,
-      },
-    ]);
-
-    setMortCount(0);
-    setMortNotes("");
-  };
   const visibleMortality = useMemo(() => {
-    if (selectedZone === "ALL") return mortality;
-    return mortality.filter((m) => m.zone === selectedZone);
-  }, [mortality, selectedZone]);
-
-  const addConsumption = () => {
-    if (!consumpDate || isAllZone) return;
-    setConsumptions((prev) => {
-      const exists = prev.some(
-        (p) => p.date === consumpDate && p.zone === selectedZone
-      );
-      const next = exists
-        ? prev.map((p) =>
-            p.date === consumpDate && p.zone === selectedZone
-              ? { ...p, feedKg: feedInput, waterL: waterInput }
-              : p
-          )
-        : [
-            ...prev,
-            {
-              zone: selectedZone as "A" | "B" | "C",
-              date: consumpDate,
-              feedKg: feedInput,
-              waterL: waterInput,
-            },
-          ];
-      return next;
-    });
-    setFeedInput(0.1);
-    setWaterInput(0.22);
-  };
+    if (selectedZone === "ALL") return cycleMortality;
+    return cycleMortality.filter((m) => m.zone === selectedZone);
+  }, [cycleMortality, selectedZone]);
 
   const visibleWeights = useMemo(() => {
-    if (selectedZone === "ALL") return weights;
-    return weights.filter((w) => w.zone === selectedZone);
-  }, [weights, selectedZone]);
+    if (selectedZone === "ALL") return cycleWeights;
+    return cycleWeights.filter((w) => w.zone === selectedZone);
+  }, [cycleWeights, selectedZone]);
 
-  const weightChartData = useMemo(() => {
-    if (isAllZone) {
-      // ALL ZONES: show all zones
-      const map = new Map<number, { day: number; A: number | null; B: number | null; C: number | null; stdA: number; stdB: number; stdC: number }>();
-      
-      weights.forEach((w) => {
-        if (!map.has(w.day)) {
-          const stdWeight = standardBroilerWeight(w.day);
-          map.set(w.day, {
-            day: w.day,
-            A: null,
-            B: null,
-            C: null,
-            stdA: stdWeight,
-            stdB: stdWeight,
-            stdC: stdWeight,
-          });
-        }
-        const row = map.get(w.day)!;
-        if (w.zone === "A") row.A = w.actualWeightKg;
-        if (w.zone === "B") row.B = w.actualWeightKg;
-        if (w.zone === "C") row.C = w.actualWeightKg;
+  const saveDailyProductionLog = (input: DailyProductionLogInput) => {
+    if (
+      cycle.status !== "active" ||
+      selectedZone === "ALL" ||
+      input.date < cycle.startDate
+    )
+      return;
+
+    const zone = selectedZone;
+
+    if (input.mortalityCount !== undefined) {
+      setMortality((previous) => [
+        ...previous.filter(
+          (entry) =>
+            !(
+              entry.cycleId === cycle.id &&
+              entry.zone === zone &&
+              entry.date === input.date
+            )
+        ),
+        {
+          cycleId: cycle.id,
+          zone,
+          date: input.date,
+          count: input.mortalityCount!,
+          notes: input.mortalityNotes || undefined,
+        },
+      ]);
+    }
+
+    if (input.feedKg !== undefined && input.waterL !== undefined) {
+      setConsumptions((previous) => {
+        const existingIndex = previous.findIndex(
+          (entry) =>
+            entry.cycleId === cycle.id &&
+            entry.zone === zone &&
+            entry.date === input.date
+        );
+        const nextEntry: ConsumptionEntry = {
+          cycleId: cycle.id,
+          zone,
+          date: input.date,
+          feedKg: input.feedKg!,
+          waterL: input.waterL!,
+        };
+
+        if (existingIndex === -1) return [...previous, nextEntry];
+        return previous.map((entry, index) =>
+          index === existingIndex ? nextEntry : entry
+        );
+      });
+    }
+
+    if (input.averageWeightKg !== undefined) {
+      const day = dateToDayNumber(input.date, cycle.startDate);
+      setWeights((previous) => {
+        const existingIndex = previous.findIndex(
+          (entry) =>
+            entry.cycleId === cycle.id &&
+            entry.zone === zone &&
+            entry.day === day
+        );
+        const nextEntry: WeightEntry = {
+          cycleId: cycle.id,
+          zone,
+          day,
+          stdWeightKg: standardBroilerWeight(day),
+          actualWeightKg: input.averageWeightKg!,
+        };
+        const next =
+          existingIndex === -1
+            ? [...previous, nextEntry]
+            : previous.map((entry, index) =>
+                index === existingIndex ? nextEntry : entry
+              );
+
+        return next.sort(
+          (left, right) =>
+            left.day - right.day || left.zone.localeCompare(right.zone)
+        );
+      });
+    }
+  };
+
+  const reportZone: Zone =
+    selectedZone === "ALL" ? (ACTIVE_ZONES[0] ?? "A") : selectedZone;
+  const fullReportData = useMemo(() => createZoneData(allData), [allData]);
+  const reportDataset = useMemo(() => {
+    const endDate = cycle.actualHarvestDate;
+    return fullReportData[reportZone].filter((point) => {
+      const pointDate = point.time.slice(0, 10);
+      return (
+        pointDate >= cycle.startDate && (!endDate || pointDate <= endDate)
+      );
+    });
+  }, [cycle.actualHarvestDate, cycle.startDate, fullReportData, reportZone]);
+  const currentProductionData = useMemo<HistoricalProductionData>(() => {
+    const mortalityByDate = new Map<string, number>();
+    cycleMortality
+      .filter((entry) => entry.zone === reportZone)
+      .forEach((entry) => {
+        mortalityByDate.set(
+          entry.date,
+          (mortalityByDate.get(entry.date) ?? 0) + entry.count
+        );
       });
 
-      return Array.from(map.values()).sort((a, b) => a.day - b.day);
-    } else {
-      // SINGLE ZONE: show only selected zone with actual and standard
-      return visibleWeights
-        .map((w) => ({
-          day: w.day,
-          actualWeightKg: w.actualWeightKg,
-          stdWeightKg: w.stdWeightKg,
+    return {
+      initialBirds: cycle.initialBirds,
+      harvestedBirds:
+        cycle.status === "completed" && cycle.harvestedBirds > 0
+          ? cycle.harvestedBirds
+          : undefined,
+      mortality: Array.from(mortalityByDate.entries())
+        .map(([date, count]) => ({
+          day: dateToDayNumber(date, cycle.startDate),
+          date,
+          count,
         }))
-        .sort((a, b) => a.day - b.day);
-    }
-  }, [weights, visibleWeights, isAllZone]);
+        .sort((left, right) => left.day - right.day),
+      feedWater: cycleConsumptions
+        .filter((entry) => entry.zone === reportZone)
+        .map((entry) => ({
+          day: dateToDayNumber(entry.date, cycle.startDate),
+          date: entry.date,
+          feedKgPerBird: entry.feedKg,
+          waterLPerBird: entry.waterL,
+        }))
+        .sort((left, right) => left.day - right.day),
+      weights: cycleWeights
+        .filter((entry) => entry.zone === reportZone)
+        .map((entry) => ({
+          day: entry.day,
+          actualWeightKg: entry.actualWeightKg,
+          standardWeightKg: entry.stdWeightKg,
+        }))
+        .sort((left, right) => left.day - right.day),
+    };
+  }, [
+    cycle.harvestedBirds,
+    cycle.initialBirds,
+    cycle.startDate,
+    cycle.status,
+    cycleConsumptions,
+    cycleMortality,
+    cycleWeights,
+    reportZone,
+  ]);
 
-  const reportDataset = useMemo(() => {
-    if (selectedZone === "ALL") return chartData;
-    return zoneData[selectedZone] ?? [];
-  }, [chartData, selectedZone, zoneData]);
+  const harvestSummary = useMemo(
+    () =>
+      calculateHarvestSummary({
+        cycle,
+        mortality: cycleMortality,
+        consumptions: cycleConsumptions,
+        weights: cycleWeights,
+        sensorData: reportDataset,
+        alerts: cycleAlerts,
+        zone: reportZone,
+      }),
+    [
+      cycle,
+      cycleAlerts,
+      cycleConsumptions,
+      cycleMortality,
+      cycleWeights,
+      reportDataset,
+      reportZone,
+    ]
+  );
+
+  const resetCurrentCycleAi = () => {
+    setAiInsight("");
+    setAiInsightSignature(null);
+    setRequestedInsightSignature(null);
+    setAiError(null);
+  };
+
+  const handleCycleChange = (changes: ProductionCycle) => {
+    if (cycle.status !== "active") return;
+    setCycle((current) =>
+      updateProductionCycle(normalizeProductionCycle(current), changes)
+    );
+    resetCurrentCycleAi();
+  };
+
+  const handleStartCycle = (input: StartCycleInput) => {
+    const cycleId = input.id.trim();
+    if (!cycleId) return;
+    if (historicalCycles.some((historicalCycle) => historicalCycle.id === cycleId)) {
+      window.alert(
+        `Cycle ID ${cycleId} already exists. Use a unique Cycle ID for the new flock.`
+      );
+      return;
+    }
+
+    const nextCycle = startProductionCycle({ ...input, id: cycleId });
+    setCycle(nextCycle);
+    setLatestToast(null);
+    alertFlagsRef.current = {
+      temp: false,
+      humidity: false,
+      co2: false,
+      nh3: false,
+      pm25: false,
+    };
+    resetCurrentCycleAi();
+  };
+
+  const handleCompleteCycle = (input: CompleteCycleInput) => {
+    if (cycle.status !== "active") return;
+    const completedCycle = completeProductionCycle(cycle, input);
+    const completedSummary = {
+      ...harvestSummary,
+      harvestedBirds: input.harvestedBirds,
+      totalLiveWeightKg:
+        input.harvestedBirds * harvestSummary.finalAverageWeightKg,
+    };
+    const snapshot = buildHistoricalCycleSnapshot({
+      cycle: completedCycle,
+      summary: completedSummary,
+      sensorData: reportDataset,
+      mortality: cycleMortality,
+      consumptions: cycleConsumptions,
+      weights: cycleWeights,
+      alerts: cycleAlerts,
+      zone: reportZone,
+    });
+
+    setCycle(completedCycle);
+    setManagedHistoricalCycles((previous) => [
+      snapshot,
+      ...previous.filter((historicalCycle) => historicalCycle.id !== cycle.id),
+    ]);
+    setSelectedHistoricalCycleKey(snapshot.key);
+    resetCurrentCycleAi();
+  };
+
+  const handleReopenCycle = (reason: string) => {
+    if (cycle.status !== "completed" || !reason.trim()) return;
+    setCycle((current) =>
+      reopenProductionCycle(normalizeProductionCycle(current), reason)
+    );
+    setManagedHistoricalCycles((previous) =>
+      previous.filter((historicalCycle) => historicalCycle.id !== cycle.id)
+    );
+    setSelectedHistoricalCycleKey("latest");
+    resetCurrentCycleAi();
+  };
+
+  const deterministicSummary = useMemo(
+    () => buildDeterministicCycleSummary(cycle, harvestSummary, reportDataset),
+    [cycle, harvestSummary, reportDataset]
+  );
+
+  const currentInsightSignature = useMemo(
+    () =>
+      JSON.stringify({
+        type: selectedInsight,
+        cycleId: cycle.id,
+        zone: reportZone,
+        latestReading: reportDataset.at(-1)?.time ?? "-",
+        mortality: harvestSummary.totalMortality,
+        finalWeight: harvestSummary.finalAverageWeightKg,
+        feed: harvestSummary.totalFeedPerBirdKg,
+        water: harvestSummary.totalWaterPerBirdL,
+        alerts: harvestSummary.alertCount,
+      }),
+    [cycle.id, harvestSummary, reportDataset, reportZone, selectedInsight]
+  );
+  const hasCurrentAiInsight =
+    aiInsightSignature === currentInsightSignature && Boolean(aiInsight);
+  const hasRequestedCurrentInsight =
+    requestedInsightSignature === currentInsightSignature;
+  const showInsightContent =
+    hasCurrentAiInsight || (hasRequestedCurrentInsight && Boolean(aiError));
+  const currentAiInsight = hasCurrentAiInsight ? aiInsight : "";
 
   const reportSummary = useMemo(() => summarizeData(reportDataset), [reportDataset]);
 
@@ -1244,8 +1620,8 @@ PM2.5 ≤ 35 µg/m³
   }, [reportSummary]);
 
   const insightBlocks = useMemo(
-    () => parseInsightMarkdown(aiInsight),
-    [aiInsight]
+    () => parseInsightMarkdown(currentAiInsight || deterministicSummary),
+    [currentAiInsight, deterministicSummary]
   );
 
   // ===== PDF Report Generation =====
@@ -1269,10 +1645,7 @@ PM2.5 ≤ 35 µg/m³
         day: "numeric",
       });
 
-      const selectedZoneLabel =
-        selectedZone === "ALL"
-          ? "All Zones"
-          : `Zone ${selectedZone}`;
+      const selectedZoneLabel = `${cycle.houseName} · Zone ${reportZone}`;
 
       const latestData = reportDataset.at(-1);
       const generatedAt = new Date().toLocaleString("id-ID");
@@ -1280,30 +1653,24 @@ PM2.5 ≤ 35 µg/m³
         sensorMeta?.runtimeStart && sensorMeta?.runtimeEnd
           ? `${sensorMeta.runtimeStart} to ${sensorMeta.runtimeEnd}`
           : `${reportDataset[0]?.time ?? "-"} to ${latestData?.time ?? "-"}`;
-      const alertCount = countLatestAlerts(latestData);
+      const alertCount = harvestSummary.alertCount;
       const overallStatus = reportStatus(alertCount, reportActions);
       const statusColor = reportStatusColor(overallStatus);
-      const zoneSections =
-        selectedZone === "ALL"
-          ? [
-              buildZoneReportSection("All Zones Overview", chartData, dateWindow),
-              buildZoneReportSection("Zone A", zoneData.A, dateWindow, {
-                compact: true,
-              }),
-              buildZoneReportSection("Zone B", zoneData.B, dateWindow, {
-                compact: true,
-              }),
-              buildZoneReportSection("Zone C", zoneData.C, dateWindow, {
-                compact: true,
-              }),
-            ].join("")
-          : buildZoneReportSection(selectedZoneLabel, reportDataset, dateWindow);
+      const zoneSections = buildZoneReportSection(
+        selectedZoneLabel,
+        reportDataset,
+        dateWindow
+      );
+      const reportNarrative = escapeHtml(
+        currentAiInsight || deterministicSummary
+      ).replaceAll("\n", "<br/>");
+      const safeCycleId = cycle.id.replace(/[^a-zA-Z0-9_-]/g, "_");
 
       const reportHTML = `
         <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #172033;">
           <div style="display: flex; justify-content: space-between; gap: 24px; margin-bottom: 24px; border-bottom: 3px solid #2563eb; padding-bottom: 18px;">
             <div>
-              <h1 style="margin: 0; color: #111827; font-size: 30px;">Broiler Environment Report</h1>
+              <h1 style="margin: 0; color: #111827; font-size: 30px;">Broiler End-of-Cycle Report</h1>
               <p style="margin: 6px 0 0; color: #64748b; font-size: 14px;">iSENS-COOP Smart Sensing System</p>
             </div>
             <div style="text-align: right;">
@@ -1314,16 +1681,17 @@ PM2.5 ≤ 35 µg/m³
 
           <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 26px;">
             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Zone</div>
-              <div style="font-size: 20px; font-weight: 700;">${selectedZoneLabel}</div>
+              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">House</div>
+              <div style="font-size: 20px; font-weight: 700;">${escapeHtml(selectedZoneLabel)}</div>
             </div>
             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Records</div>
-              <div style="font-size: 20px; font-weight: 700;">${reportDataset.length}</div>
+              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Cycle</div>
+              <div style="font-size: 16px; font-weight: 700;">${escapeHtml(cycle.id)}</div>
+              <div style="margin-top:4px; font-size:11px; color:#64748b; text-transform:uppercase;">${cycle.status} · revision ${cycle.revision}</div>
             </div>
             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Latest Alerts</div>
-              <div style="font-size: 20px; font-weight: 700; color:${statusColor};">${alertCount}</div>
+              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Birds Remaining</div>
+              <div style="font-size: 20px; font-weight: 700;">${harvestSummary.survivingBirds.toLocaleString()}</div>
             </div>
             <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
               <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Generated</div>
@@ -1331,7 +1699,46 @@ PM2.5 ≤ 35 µg/m³
             </div>
           </div>
 
+          <section style="page-break-inside: avoid; margin-bottom: 28px;">
+            <h2 style="font-size:20px; margin:0 0 12px;">Production & Harvest KPI</h2>
+            <table style="width:100%; border-collapse:collapse; font-size:13px;">
+              <tr style="background:#eff6ff;">
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Birds placed</th>
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Mortality</th>
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Mortality rate</th>
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Final avg weight</th>
+              </tr>
+              <tr>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${cycle.initialBirds.toLocaleString()}</td>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalMortality}</td>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.mortalityRate.toFixed(2)}%</td>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.finalAverageWeightKg.toFixed(3)} kg</td>
+              </tr>
+              <tr style="background:#eff6ff;">
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Feed / bird</th>
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Water / bird</th>
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">FCR estimate</th>
+                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Live weight</th>
+              </tr>
+              <tr>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalFeedPerBirdKg.toFixed(2)} kg</td>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalWaterPerBirdL.toFixed(2)} L</td>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.fcr.toFixed(2)}</td>
+                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalLiveWeightKg.toFixed(0)} kg</td>
+              </tr>
+            </table>
+            <div style="margin-top:12px; padding:12px; border-radius:10px; background:#f0fdf4; border:1px solid #bbf7d0;">
+              <strong>Sensor health: ${harvestSummary.sensorHealth.status}</strong> · ${harvestSummary.sensorHealth.completeness.toFixed(1)}% completeness · ${harvestSummary.alertCount} alert events
+            </div>
+          </section>
+
           ${zoneSections}
+
+          <section style="page-break-inside: avoid; margin: 24px 0; padding:16px; border:1px solid #c4b5fd; background:#f5f3ff; border-radius:12px;">
+            <h2 style="font-size:20px; margin:0 0 10px; color:#5b21b6;">AI-Assisted Cycle Summary</h2>
+            <div style="font-size:13px;">${reportNarrative}</div>
+            <p style="font-size:11px; color:#6b7280; margin:12px 0 0;">Decision-support narrative. Confirm findings through physical inspection and farm records.</p>
+          </section>
 
           <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; font-size: 12px; color: #999;">
             <p>This report was generated by iSENS-COOP System for monitoring and operational review.</p>
@@ -1360,23 +1767,24 @@ PM2.5 ≤ 35 µg/m³
       const imgData = canvas.toDataURL("image/png");
       const imgWidth = 210; // A4 width in mm
       const pageHeight = 297; // A4 height in mm
-      let heightLeft = canvas.height * (imgWidth / canvas.width);
+      const imgHeight = canvas.height * (imgWidth / canvas.width);
+      let heightLeft = imgHeight;
       let position = 0;
 
       // Add image to PDF
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, heightLeft);
+      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
       heightLeft -= pageHeight;
 
       // Add multiple pages if needed
       while (heightLeft > 0) {
-        position = heightLeft - canvas.height * (imgWidth / canvas.width);
+        position = heightLeft - imgHeight;
         pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, heightLeft);
+        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
         heightLeft -= pageHeight;
       }
 
       // Download PDF
-      pdf.save(`broiler_report_${selectedZoneLabel}_${reportDate}.pdf`);
+      pdf.save(`broiler_cycle_report_${safeCycleId}_${reportDate}.pdf`);
 
       // Clean up
       document.body.removeChild(reportContainer);
@@ -1389,7 +1797,7 @@ PM2.5 ≤ 35 µg/m³
   };
 
   return (
-    <div className="space-y-8 p-6 max-w-7xl mx-auto">
+    <div className="mx-auto flex max-w-7xl flex-col gap-8 p-6">
       {/* Header */}
       <header className="flex flex-col items-center gap-4 mb-2">
         <div className="flex gap-4">
@@ -1412,49 +1820,76 @@ PM2.5 ≤ 35 µg/m³
       <hr className="border-gray-300 my-4" />
       {/* Global Controls - Sticky */}
       <section className="sticky top-0 z-50 bg-gray-50 rounded-2xl p-4 shadow-lg border-b-2 border-gray-300">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Select Zone
-            </label>
-            <select
-              value={selectedZone}
-              onChange={(e) => setSelectedZone(e.target.value as any)}
-              className="w-full border rounded-lg px-3 py-2 font-semibold"
-            >
-              <option value="ALL">All Zones</option>
-              <option value="A">Zone A</option>
-              <option value="B">Zone B</option>
-              <option value="C">Zone C</option>
-            </select>
-          </div>
-
-          <div className="text-xs text-gray-500">
-            Applied to all sections below
-          </div>
-
-          <div></div>
-
-          <div>
-            <button
-              onClick={generatePDFReport}
-              disabled={isDownloadingPDF || data.length === 0}
-              className="w-full bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white px-4 py-2 rounded-lg font-semibold flex items-center justify-center gap-2 transition-colors"
-            >
-              {isDownloadingPDF ? (
-                <>
-                  <span className="animate-spin">⏳</span>
-                  Generating...
-                </>
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-center">
+          <div className="flex flex-wrap items-center gap-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-gray-500">Monitored house</div>
+              {IS_SINGLE_ZONE ? (
+                <div className="font-semibold">
+                  {cycle.houseName} · Zone {ACTIVE_ZONES[0]}
+                </div>
               ) : (
-                <>
-                  <span>📄</span>
-                  Download Report
-                </>
+                <select
+                  value={selectedZone}
+                  onChange={(event) =>
+                    setSelectedZone(event.target.value as SelectableZone)
+                  }
+                  className="mt-1 min-w-40 rounded-lg border border-gray-300 bg-white px-3 py-2 font-semibold"
+                  aria-label="Select monitored zone"
+                >
+                  <option value="ALL">All Zones</option>
+                  {ACTIVE_ZONES.map((zone) => (
+                    <option key={zone} value={zone}>
+                      Zone {zone}
+                    </option>
+                  ))}
+                </select>
               )}
-            </button>
+            </div>
+            <span className="text-xs px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200">
+              Sensor Replay · {REALTIME_INTERVAL_MS / 1000}s refresh
+            </span>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+              {cycle.status === "completed" ? "Completed" : "Active"} · Cycle
+              Day {harvestSummary.cycleDay} / {cycle.targetHarvestDay}
+            </span>
+            <span className="text-xs text-gray-500">
+              Current record: {latestSafe.time}
+            </span>
           </div>
+
+          <NotificationCenter
+            alerts={cycleAlerts}
+            soundEnabled={soundEnabled}
+            onToggleSound={() => setSoundEnabled((enabled) => !enabled)}
+            onAcknowledge={acknowledgeAlert}
+          />
+
         </div>
+      </section>
+
+      {latestToast && (
+        <div className={`fixed top-24 right-6 z-[80] max-w-sm rounded-2xl border shadow-2xl p-4 ${latestToast.severity === "critical" ? "bg-red-50 border-red-300" : "bg-amber-50 border-amber-300"}`}>
+          <div className="font-semibold">⚠️ {latestToast.label} alert</div>
+          <div className="text-sm mt-1">{latestToast.message}</div>
+          <div className="text-xs text-gray-500 mt-2">{latestToast.timestamp}</div>
+        </div>
+      )}
+
+      <section className="rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white p-5">
+        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
+          Current Data Monitoring
+        </div>
+        <h2 className="mt-1 text-2xl font-semibold text-slate-950">
+          {cycle.status === "completed"
+            ? "Completed Cycle Review"
+            : "Active Production Cycle"}
+        </h2>
+        <p className="mt-1 max-w-3xl text-sm text-slate-600">
+          {cycle.status === "completed"
+            ? "This cycle is locked. Its production and sensor snapshot is available in Historical Data, while lifecycle actions remain available below."
+            : "Realtime CCTV, sensor readings, production records, cycle progress, prediction, system health, and on-demand AI summary for the cycle in progress."}
+        </p>
       </section>
 
       {/* CCTV Section */}
@@ -1465,22 +1900,14 @@ PM2.5 ≤ 35 µg/m³
         {selectedZone !== "ALL" && (
           <div className="rounded-2xl overflow-hidden shadow-lg relative">
             <div className="relative">
-              <video
-                src={
-                  selectedZone === "A"
-                    ? "/video/cctv ayam 1_tracked-stay.mp4"
-                    : selectedZone === "B"
-                      ? "/video/cctv ayam 1_tracked-stay.mp4"
-                      : "/video/cctv ayam 1_tracked-stay.mp4"
-                }
-                autoPlay
-                loop
-                muted
-                playsInline
+              <CameraFeed
+                zone={selectedZone}
+                // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
+                dummySrc="/video/raw_video_dataset.mp4"
                 className="w-full object-cover"
               />
               <div className="absolute top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-lg text-sm font-medium">
-                Zone {selectedZone}
+                {cycle.houseName}
               </div>
             </div>
           </div>
@@ -1489,24 +1916,16 @@ PM2.5 ≤ 35 µg/m³
         {/* Show all zones CCTV when ALL is selected */}
         {selectedZone === "ALL" && (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {(["A", "B", "C"] as const).map((zone) => (
+            {ACTIVE_ZONES.map((zone) => (
               <div
                 key={zone}
                 className="rounded-2xl overflow-hidden shadow-lg relative"
               >
                 <div className="relative">
-                  <video
-                    src={
-                      zone === "A"
-                        ? "/video/cctv ayam 1_tracked-stay.mp4"
-                        : zone === "B"
-                          ? "/video/cctv ayam 1_tracked-stay.mp4"
-                          : "/video/cctv ayam 1_tracked-stay.mp4"
-                    }
-                    autoPlay
-                    loop
-                    muted
-                    playsInline
+                  <CameraFeed
+                    zone={zone}
+                    // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
+                    dummySrc="/video/raw_video_dataset.mp4"
                     className="w-full object-cover"
                   />
                   <div className="absolute top-4 right-4 bg-black/50 text-white px-3 py-1 rounded-lg text-sm font-medium">
@@ -1522,8 +1941,7 @@ PM2.5 ≤ 35 µg/m³
       {/* Live Readings */}
       <section>
         <h2 className="text-2xl font-semibold mb-4">
-          Live Readings{" "}
-          {selectedZone === "ALL" ? "– All Zones" : `– Zone ${selectedZone}`}
+          Realtime Readings – {cycle.houseName}
         </h2>
 
         {/* ================= ALL ZONES ================= */}
@@ -1545,8 +1963,12 @@ PM2.5 ≤ 35 µg/m³
                   <p className="text-sm text-gray-600 mb-2">{item.label}</p>
 
                   <div className="space-y-2 text-sm">
-                    {item.values.map((v) => {
-                      const isHigh = v.value > item.limit;
+                    {item.values
+                      .filter((value) =>
+                        ACTIVE_ZONES.includes(value.zone as Zone)
+                      )
+                      .map((v) => {
+                        const isHigh = v.value > item.limit;
 
                       return (
                         <div
@@ -1592,18 +2014,220 @@ PM2.5 ≤ 35 µg/m³
         )}
       </section>
 
-      {/* Trend Analysis */}
-      {/* ================= TREND ANALYSIS ================= */}
-      <section>
-        <h2 className="text-2xl font-semibold mb-4">Trend Analysis</h2>
+      <CurrentCycleSensorTrends
+        cycle={cycle}
+        data={reportDataset}
+        zone={reportZone}
+      />
+
+      {selectedZone !== "ALL" ? (
+        <ProductionCyclePanel
+          cycle={cycle}
+          summary={harvestSummary}
+          onChange={handleCycleChange}
+          onStart={handleStartCycle}
+          onComplete={handleCompleteCycle}
+          onReopen={handleReopenCycle}
+          onDownload={generatePDFReport}
+          isDownloading={isDownloadingPDF}
+        />
+      ) : (
+        <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+          Select a zone to review its production cycle KPI, AI summary, and cycle report.
+        </section>
+      )}
+
+      {selectedZone !== "ALL" && (
+        <CurrentCyclePrediction
+          cycle={cycle}
+          summary={harvestSummary}
+          sensorData={reportDataset}
+          zone={reportZone}
+        />
+      )}
+
+      {/* ================= HISTORICAL TREND ANALYSIS ================= */}
+      <section
+        data-testid="historical-data-section"
+        className="order-2"
+      >
+        <div
+          className={`rounded-2xl border border-violet-100 bg-gradient-to-r from-violet-50 to-white p-5 shadow-sm ${
+            isHistoricalDataOpen ? "mb-6" : ""
+          }`}
+        >
+          <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-600">
+                Historical Data
+              </div>
+              <h2 className="mt-1 text-2xl font-semibold text-slate-950">
+                Completed Production Cycles
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                Review environmental trends, production outcomes, and lessons
+                from completed flocks only when they are needed.
+              </p>
+            </div>
+
+            <div className="flex flex-col items-stretch gap-2 sm:items-end">
+              <span className="text-xs font-medium text-violet-700">
+                {historicalCycles.length} completed cycle
+                {historicalCycles.length === 1 ? "" : "s"} available
+              </span>
+              <button
+                type="button"
+                aria-expanded={isHistoricalDataOpen}
+                aria-controls="historical-data-content"
+                onClick={() =>
+                  setIsHistoricalDataOpen((isOpen) => !isOpen)
+                }
+                className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"
+              >
+                {isHistoricalDataOpen
+                  ? "Hide Historical Data"
+                  : "Show Historical Data"}
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  className={`h-4 w-4 transition-transform ${
+                    isHistoricalDataOpen ? "rotate-180" : ""
+                  }`}
+                >
+                  <path
+                    d="m5 7.5 5 5 5-5"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {isHistoricalDataOpen && (
+        <>
+          <section id="historical-data-content" className="order-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+          <h2 className="text-2xl font-semibold">Historical Cycle Trends</h2>
+          <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
+            Historical data · static
+          </span>
+        </div>
+        <p className="mb-4 text-sm text-gray-500">
+          These charts use complete stored production cycles. Realtime sensor
+          replay only updates the readings and alerts above.
+        </p>
+
+        <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+            <label className="block w-full md:max-w-xl">
+              <span className="mb-1.5 block text-sm font-medium text-gray-700">
+                Production cycle
+              </span>
+              <select
+                value={selectedHistoricalCycleKey}
+                onChange={(event) =>
+                  setSelectedHistoricalCycleKey(
+                    event.target.value as HistoricalCycle["key"]
+                  )
+                }
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2.5 text-sm font-medium text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              >
+                {historicalCycles.map((historicalCycle) => (
+                  <option
+                    key={historicalCycle.key}
+                    value={historicalCycle.key}
+                  >
+                    {historicalCycle.label} · {historicalCycle.id} · {historicalCycle.startDate} – {historicalCycle.endDate}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="w-fit rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
+              {selectedHistoricalCycle?.status ?? "Completed"}
+            </span>
+          </div>
+
+          {selectedHistoricalCycle && (
+            <div className="mt-4 grid grid-cols-2 gap-3 border-t border-gray-100 pt-4 sm:grid-cols-4 xl:grid-cols-9">
+              {[
+                ["Period", `${selectedHistoricalCycle.startDate} – ${selectedHistoricalCycle.endDate}`],
+                ["Harvest", `Day ${selectedHistoricalCycle.harvestDay}`],
+                ["Readings", selectedHistoricalCycle.data.length],
+                ["Avg temp", `${selectedHistoricalCycle.averages.temp.toFixed(2)} °C`],
+                ["Avg humidity", `${selectedHistoricalCycle.averages.humidity.toFixed(2)}%`],
+                ["Avg CO₂", `${selectedHistoricalCycle.averages.co2} ppm`],
+                ["Avg NH₃", `${selectedHistoricalCycle.averages.nh3.toFixed(2)} ppm`],
+                ["Avg PM2.5", `${selectedHistoricalCycle.averages.pm25.toFixed(2)} µg/m³`],
+                [
+                  "Revision",
+                  selectedHistoricalCycle.revision
+                    ? `#${selectedHistoricalCycle.revision}`
+                    : "Seed data",
+                ],
+              ].map(([label, value], index) => (
+                <div
+                  key={label}
+                  className={`min-w-0 ${index === 0 ? "col-span-2" : ""}`}
+                >
+                  <div className="text-xs text-gray-500">{label}</div>
+                  <div className="mt-1 text-sm font-semibold text-gray-900">
+                    {value}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {selectedHistoricalCycle?.completionNotes && (
+            <div className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <span className="font-semibold">Completion notes:</span>{" "}
+              {selectedHistoricalCycle.completionNotes}
+            </div>
+          )}
+          {selectedHistoricalCycle?.auditLog?.length ? (
+            <details className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-slate-700">
+                Lifecycle audit trail · {selectedHistoricalCycle.auditLog.length}{" "}
+                events
+              </summary>
+              <div className="mt-3 space-y-2">
+                {[...selectedHistoricalCycle.auditLog]
+                  .reverse()
+                  .map((event) => (
+                    <div
+                      key={event.id}
+                      className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-700"
+                    >
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="font-semibold capitalize">
+                          {event.type}
+                        </span>
+                        <span>{event.timestamp.replace("T", " ").slice(0, 16)}</span>
+                      </div>
+                      {event.reason && <p className="mt-1">{event.reason}</p>}
+                    </div>
+                  ))}
+              </div>
+            </details>
+          ) : null}
+        </div>
 
         {/* Controls */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="historical-parameter"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Select Parameter
             </label>
             <select
+              id="historical-parameter"
               value={selectedParam}
               onChange={(e) => setSelectedParam(e.target.value as any)}
               className="w-full border rounded-lg px-3 py-2"
@@ -1618,18 +2242,22 @@ PM2.5 ≤ 35 µg/m³
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label
+              htmlFor="historical-aggregation"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
               Aggregation
             </label>
             <select
+              id="historical-aggregation"
               value={aggregation}
               onChange={(e) => setAggregation(e.target.value as any)}
               className="w-full border rounded-lg px-3 py-2"
             >
-              <option value="all">All time</option>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
+              <option value="all">Raw readings (6-hour)</option>
+              <option value="daily">Daily average (per date)</option>
+              <option value="weekly">Weekly average (Mon–Sun)</option>
+              <option value="monthly">Monthly average</option>
             </select>
           </div>
         </div>
@@ -1657,6 +2285,14 @@ PM2.5 ≤ 35 µg/m³
             {isApplying ? "Applying..." : "Apply Trend"}
           </button>
         </div>
+        {!isApplying && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            <span>{aggregationDescriptions[appliedAggregation]}</span>
+            <span className="font-medium text-slate-800">
+              {trendChartData.length} plotted points
+            </span>
+          </div>
+        )}
         {isApplying && (
           <div className="flex justify-center items-center h-48 text-gray-500">
             <span className="animate-pulse">Loading trend data…</span>
@@ -1678,13 +2314,17 @@ PM2.5 ≤ 35 µg/m³
                   type="number"
                   scale="time"
                   domain={["dataMin", "dataMax"]}
-                  tickFormatter={formatTrendTick}
-                  minTickGap={28}
-                  tickCount={8}
+                  tickFormatter={(value) =>
+                    formatTrendTick(value, appliedAggregation)
+                  }
+                  minTickGap={55}
+                  tickCount={6}
                 />
                 <YAxis />
                 <Tooltip
-                  labelFormatter={formatTrendTooltipLabel}
+                  labelFormatter={(value) =>
+                    formatTrendTooltipLabel(value, appliedAggregation)
+                  }
                   isAnimationActive={false}
                   animationDuration={0}
                   cursor={trendCursor}
@@ -1694,30 +2334,17 @@ PM2.5 ≤ 35 µg/m³
 
                 {selectedZone === "ALL" ? (
                   <>
-                    <Line
-                      dataKey="tempA"
-                      name="Zone A"
-                      stroke={ZONE_COLORS.A}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="tempB"
-                      name="Zone B"
-                      stroke={ZONE_COLORS.B}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="tempC"
-                      name="Zone C"
-                      stroke={ZONE_COLORS.C}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
+                    {ACTIVE_ZONES.map((zone) => (
+                      <Line
+                        key={zone}
+                        dataKey={`temp${zone}`}
+                        name={`Zone ${zone}`}
+                        stroke={ZONE_COLORS[zone]}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </>
                 ) : (
                   <Line
@@ -1747,13 +2374,17 @@ PM2.5 ≤ 35 µg/m³
                   type="number"
                   scale="time"
                   domain={["dataMin", "dataMax"]}
-                  tickFormatter={formatTrendTick}
-                  minTickGap={28}
-                  tickCount={8}
+                  tickFormatter={(value) =>
+                    formatTrendTick(value, appliedAggregation)
+                  }
+                  minTickGap={55}
+                  tickCount={6}
                 />
                 <YAxis />
                 <Tooltip
-                  labelFormatter={formatTrendTooltipLabel}
+                  labelFormatter={(value) =>
+                    formatTrendTooltipLabel(value, appliedAggregation)
+                  }
                   isAnimationActive={false}
                   animationDuration={0}
                   cursor={trendCursor}
@@ -1763,30 +2394,17 @@ PM2.5 ≤ 35 µg/m³
 
                 {selectedZone === "ALL" ? (
                   <>
-                    <Line
-                      dataKey="humidityA"
-                      name="Zone A"
-                      stroke={ZONE_COLORS.A}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="humidityB"
-                      name="Zone B"
-                      stroke={ZONE_COLORS.B}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="humidityC"
-                      name="Zone C"
-                      stroke={ZONE_COLORS.C}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
+                    {ACTIVE_ZONES.map((zone) => (
+                      <Line
+                        key={zone}
+                        dataKey={`humidity${zone}`}
+                        name={`Zone ${zone}`}
+                        stroke={ZONE_COLORS[zone]}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </>
                 ) : (
                   <Line
@@ -1816,13 +2434,17 @@ PM2.5 ≤ 35 µg/m³
                   type="number"
                   scale="time"
                   domain={["dataMin", "dataMax"]}
-                  tickFormatter={formatTrendTick}
-                  minTickGap={28}
-                  tickCount={8}
+                  tickFormatter={(value) =>
+                    formatTrendTick(value, appliedAggregation)
+                  }
+                  minTickGap={55}
+                  tickCount={6}
                 />
                 <YAxis />
                 <Tooltip
-                  labelFormatter={formatTrendTooltipLabel}
+                  labelFormatter={(value) =>
+                    formatTrendTooltipLabel(value, appliedAggregation)
+                  }
                   isAnimationActive={false}
                   animationDuration={0}
                   cursor={trendCursor}
@@ -1832,30 +2454,17 @@ PM2.5 ≤ 35 µg/m³
 
                 {selectedZone === "ALL" ? (
                   <>
-                    <Line
-                      dataKey="co2A"
-                      name="Zone A"
-                      stroke={ZONE_COLORS.A}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="co2B"
-                      name="Zone B"
-                      stroke={ZONE_COLORS.B}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="co2C"
-                      name="Zone C"
-                      stroke={ZONE_COLORS.C}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
+                    {ACTIVE_ZONES.map((zone) => (
+                      <Line
+                        key={zone}
+                        dataKey={`co2${zone}`}
+                        name={`Zone ${zone}`}
+                        stroke={ZONE_COLORS[zone]}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </>
                 ) : (
                   <Line
@@ -1885,13 +2494,17 @@ PM2.5 ≤ 35 µg/m³
                   type="number"
                   scale="time"
                   domain={["dataMin", "dataMax"]}
-                  tickFormatter={formatTrendTick}
-                  minTickGap={28}
-                  tickCount={8}
+                  tickFormatter={(value) =>
+                    formatTrendTick(value, appliedAggregation)
+                  }
+                  minTickGap={55}
+                  tickCount={6}
                 />
                 <YAxis />
                 <Tooltip
-                  labelFormatter={formatTrendTooltipLabel}
+                  labelFormatter={(value) =>
+                    formatTrendTooltipLabel(value, appliedAggregation)
+                  }
                   isAnimationActive={false}
                   animationDuration={0}
                   cursor={trendCursor}
@@ -1901,30 +2514,17 @@ PM2.5 ≤ 35 µg/m³
 
                 {selectedZone === "ALL" ? (
                   <>
-                    <Line
-                      dataKey="nh3A"
-                      name="Zone A"
-                      stroke={ZONE_COLORS.A}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="nh3B"
-                      name="Zone B"
-                      stroke={ZONE_COLORS.B}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="nh3C"
-                      name="Zone C"
-                      stroke={ZONE_COLORS.C}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
+                    {ACTIVE_ZONES.map((zone) => (
+                      <Line
+                        key={zone}
+                        dataKey={`nh3${zone}`}
+                        name={`Zone ${zone}`}
+                        stroke={ZONE_COLORS[zone]}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </>
                 ) : (
                   <Line
@@ -1954,13 +2554,17 @@ PM2.5 ≤ 35 µg/m³
                   type="number"
                   scale="time"
                   domain={["dataMin", "dataMax"]}
-                  tickFormatter={formatTrendTick}
-                  minTickGap={28}
-                  tickCount={8}
+                  tickFormatter={(value) =>
+                    formatTrendTick(value, appliedAggregation)
+                  }
+                  minTickGap={55}
+                  tickCount={6}
                 />
                 <YAxis />
                 <Tooltip
-                  labelFormatter={formatTrendTooltipLabel}
+                  labelFormatter={(value) =>
+                    formatTrendTooltipLabel(value, appliedAggregation)
+                  }
                   isAnimationActive={false}
                   animationDuration={0}
                   cursor={trendCursor}
@@ -1970,30 +2574,17 @@ PM2.5 ≤ 35 µg/m³
 
                 {selectedZone === "ALL" ? (
                   <>
-                    <Line
-                      dataKey="pm25A"
-                      name="Zone A"
-                      stroke={ZONE_COLORS.A}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="pm25B"
-                      name="Zone B"
-                      stroke={ZONE_COLORS.B}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      dataKey="pm25C"
-                      name="Zone C"
-                      stroke={ZONE_COLORS.C}
-                      dot={false}
-                      activeDot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
+                    {ACTIVE_ZONES.map((zone) => (
+                      <Line
+                        key={zone}
+                        dataKey={`pm25${zone}`}
+                        name={`Zone ${zone}`}
+                        stroke={ZONE_COLORS[zone]}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        isAnimationActive={false}
+                      />
+                    ))}
                   </>
                 ) : (
                   <Line
@@ -2013,9 +2604,14 @@ PM2.5 ≤ 35 µg/m³
         )}
       </section>
 
-      {/* ======================= Correlation Insight ======================= */}
-      <section>
-        <h2 className="text-2xl font-semibold mb-4">Correlation Insight</h2>
+      {/* ======================= Historical Correlation Insight ======================= */}
+      <section className="order-2">
+        <h2 className="text-2xl font-semibold mb-1">
+          Historical Correlation Insight
+        </h2>
+        <p className="mb-4 text-sm text-gray-500">
+          Correlations are calculated from {selectedHistoricalCycle?.label ?? "the selected historical cycle"}.
+        </p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* ================= Temperature vs CO₂ ================= */}
@@ -2072,7 +2668,7 @@ PM2.5 ≤ 35 µg/m³
             {/* Legend */}
             <div className="flex justify-center gap-6 mt-3 text-sm">
               {(selectedZone === "ALL"
-                ? (["A", "B", "C"] as const)
+                ? ACTIVE_ZONES
                 : ([selectedZone] as const)
               ).map((z) => (
                 <span
@@ -2142,7 +2738,7 @@ PM2.5 ≤ 35 µg/m³
             {/* Legend */}
             <div className="flex justify-center gap-6 mt-3 text-sm">
               {(selectedZone === "ALL"
-                ? (["A", "B", "C"] as const)
+                ? ACTIVE_ZONES
                 : ([selectedZone] as const)
               ).map((z) => (
                 <span
@@ -2212,7 +2808,7 @@ PM2.5 ≤ 35 µg/m³
             {/* Legend */}
             <div className="flex justify-center gap-6 mt-3 text-sm">
               {(selectedZone === "ALL"
-                ? (["A", "B", "C"] as const)
+                ? ACTIVE_ZONES
                 : ([selectedZone] as const)
               ).map((z) => (
                 <span
@@ -2228,767 +2824,60 @@ PM2.5 ≤ 35 µg/m³
             </div>
           </div>
         </div>
-      </section>
+          </section>
+        </>
+      )}
 
-      {/* ============ Health & Behavior Monitoring (Prototype) ============ */}
+      {isHistoricalDataOpen && selectedHistoricalCycle && (
+        <HistoricalProductionOverview cycle={selectedHistoricalCycle} />
+      )}
+
+      {isHistoricalDataOpen && selectedHistoricalCycle && (
+        <section className="order-2">
+          <HistoricalCycleAiAnalysis cycle={selectedHistoricalCycle} />
+        </section>
+      )}
+
+      {/* ============ Production Monitoring ============ */}
       <section>
-        <h2 className="text-2xl font-semibold mb-4">
-          Health & Behavior Monitoring
-        </h2>
-
-        {/* Vision-based Activity (Prototype) */}
-        {selectedZone !== "ALL" && (
-          <div className="bg-white rounded-2xl shadow p-4 mb-6">
-            <h3 className="font-semibold text-lg mb-3">
-              Chicken Activity Analysis (Vision-Based) – Zone {selectedZone}
-            </h3>
-            <div className="rounded-xl overflow-hidden relative w-full" style={{ aspectRatio: '16/9' }}>
-              <video
-                src={
-                  selectedZone === "A"
-                    ? "/video/cctv ayam 1.mp4"
-                    : selectedZone === "B"
-                      ? "/video/cctv ayam 1.mp4"
-                      : "/video/cctv ayam 1.mp4"
-                }
-                autoPlay
-                loop
-                muted
-                playsInline
-                className="w-full h-full object-cover"
-              />
-              {/* Pseudo heatmap overlay */}
-              <div
-                className="absolute inset-0 pointer-events-none opacity-40"
-                style={{
-                  background:
-                    "radial-gradient(circle at 30% 40%, #ff0000, transparent 40%), radial-gradient(circle at 70% 60%, #ffbb00, transparent 35%), radial-gradient(circle at 50% 30%, #ffff00d7, transparent 30%)",
-                }}
-              />
-              <div className="absolute bottom-2 right-2 bg-white/80 backdrop-blur px-3 py-1 rounded-lg text-xs">
-                Heatmap
-              </div>
-            </div>
-
-            <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-              <div className="p-3 rounded-lg bg-gray-50">
-                <div className="text-gray-500">Activity Score</div>
-                <div className="text-xl font-semibold">
-                  {Math.round(activityScore)}
-                </div>
-              </div>
-              <div className="p-3 rounded-lg bg-gray-50">
-                <div className="text-gray-500">Status</div>
-                <div
-                  className={`text-sm font-semibold ${
-                    activityScore < 35
-                      ? "text-red-600"
-                      : activityScore < 60
-                        ? "text-yellow-600"
-                        : "text-green-700"
-                  }`}
-                >
-                  {activityScore < 35
-                    ? "Abnormal (Low)"
-                    : activityScore < 60
-                      ? "Moderate"
-                      : "Normal"}
-                </div>
-              </div>
-              <div className="p-3 rounded-lg bg-gray-50">
-                <div className="text-gray-500">Reason</div>
-                <div className="text-xs">{abnormalReason}</div>
-              </div>
-            </div>
+        {cycle.status === "completed" && (
+          <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+            This cycle is completed and production entry is locked. Review its
+            fixed snapshot in Historical Data, or reopen it with a reason to
+            make corrections.
           </div>
         )}
-
-        {/* All zones activity view */}
-        {selectedZone === "ALL" && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-            {activityByZone.map(({ zone, score, reason }) => (
-              <div key={zone} className="bg-white rounded-2xl shadow p-4">
-                <h3 className="font-semibold text-lg mb-3">
-                  Activity Analysis – Zone {zone}
-                </h3>
-                <div className="rounded-xl overflow-hidden relative w-full" style={{ aspectRatio: '16/9' }}>
-                  <video
-                    src={
-                      zone === "A"
-                        ? "/video/cctv ayam 1.mp4"
-                        : zone === "B"
-                          ? "/video/cctv ayam 1.mp4"
-                          : "/video/cctv ayam 1.mp4"
-                    }
-                    autoPlay
-                    loop
-                    muted
-                    playsInline
-                    className="w-full h-full object-cover"
-                  />
-                  {/* Pseudo heatmap overlay */}
-                  <div
-                    className="absolute inset-0 pointer-events-none opacity-40"
-                    style={{
-                      background:
-                        "radial-gradient(circle at 30% 40%, #ff0000, transparent 40%), radial-gradient(circle at 70% 60%, #ffbb00, transparent 35%), radial-gradient(circle at 50% 30%, #ffff00d7, transparent 30%)",
-                    }}
-                  />
-                  <div className="absolute bottom-2 right-2 bg-white/80 backdrop-blur px-2 py-0.5 rounded text-xs">
-                    Heatmap
-                  </div>
-                </div>
-
-                <div className="mt-3 grid grid-cols-1 gap-2 text-xs">
-                  <div className="p-2 rounded-lg bg-gray-50">
-                    <div className="text-gray-500">Activity Score</div>
-                    <div className="text-lg font-semibold">
-                      {Math.round(score)}
-                    </div>
-                  </div>
-                  <div className="p-2 rounded-lg bg-gray-50">
-                    <div className="text-gray-500">Status</div>
-                    <div
-                      className={`font-semibold ${
-                        score < 35
-                          ? "text-red-600"
-                          : score < 60
-                            ? "text-yellow-600"
-                            : "text-green-700"
-                      }`}
-                    >
-                      {score < 35
-                        ? "Abnormal"
-                        : score < 60
-                          ? "Moderate"
-                          : "Normal"}
-                    </div>
-                  </div>
-                  <div className="p-2 rounded-lg bg-gray-50">
-                    <div className="text-gray-500">Reason</div>
-                    <div className="text-xs">{reason}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+        {isAllZone && (
+          <p className="-mt-2 mb-4 text-sm text-gray-500">
+            Showing all active zones. Select a specific zone above to add or
+            update mortality, feed, water, and body weight records.
+          </p>
         )}
 
-        {/* Row: Mortality */}
-        <div className={`grid gap-6 mb-6 ${isAllZone ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-3"}`}>
-          {/* Mortality Logging - Table */}
-          {!isAllZone && (
-            <div className="lg:col-span-1 bg-white rounded-2xl shadow p-4">
-              <h3 className="font-semibold text-lg mb-3">
-                Mortality Detection / Logging
-              </h3>
+        <ProductionPerformanceCharts
+          title="Current Production Performance"
+          description={`Mortality, feed, water, and body-weight records for ${cycle.id} · Zone ${reportZone}.`}
+          periodLabel={`${cycle.startDate} – ${
+            cycle.actualHarvestDate ??
+            reportDataset.at(-1)?.time.slice(0, 10) ??
+            "Current"
+          }`}
+          production={currentProductionData}
+        />
 
-              {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
-              {!isAllZone && (
-                <div className="mb-4">
-                  <div className="grid grid-cols-4 gap-2 mb-3">
-                    <div>
-                      <label className="text-sm text-gray-600">Date</label>
-                      <input
-                        type="date"
-                        className="w-full border rounded-lg px-3 py-2"
-                        value={mortDate}
-                        onChange={(e) => setMortDate(e.target.value)}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-sm text-gray-600">Count</label>
-                      <input
-                        type="number"
-                        className="w-full border rounded-lg px-3 py-2"
-                        min={0}
-                        value={mortCount}
-                        onChange={(e) => setMortCount(Number(e.target.value))}
-                      />
-                    </div>
-
-                    <div className="col-span-2">
-                      <label className="text-sm text-gray-600">Notes</label>
-                      <input
-                        className="w-full border rounded-lg px-3 py-2"
-                        placeholder="optional"
-                        value={mortNotes}
-                        onChange={(e) => setMortNotes(e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={addMortality}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
-                  >
-                    Add
-                  </button>
-                </div>
-              )}
-
-              {/* ================= TABLE ================= */}
-              <div className="max-h-52 overflow-auto border rounded-lg">
-                <table className="w-full text-sm">
-                  <thead>
-                    {isAllZone ? (
-                      <tr className="text-left text-gray-500">
-                        <th className="py-2">Date</th>
-                        <th className="py-2 text-center">Zone A</th>
-                        <th className="py-2 text-center">Zone B</th>
-                        <th className="py-2 text-center">Zone C</th>
-                      </tr>
-                    ) : (
-                      <tr className="text-left text-gray-500">
-                        <th className="py-2">Date</th>
-                        <th className="py-2">Count</th>
-                        <th className="py-2">Notes</th>
-                      </tr>
-                    )}
-                  </thead>
-
-                  {/* ===== ALL ZONE BODY ===== */}
-                  {isAllZone && (
-                    <tbody>
-                      {mortalitySummaryByDate.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="py-3 text-gray-400">
-                            No records yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        mortalitySummaryByDate.map((row) => (
-                          <tr key={row.date} className="border-t">
-                            <td className="py-2">{row.date}</td>
-                            <td className="py-2 text-center">{row.A}</td>
-                            <td className="py-2 text-center">{row.B}</td>
-                            <td className="py-2 text-center">{row.C}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  )}
-
-                  {/* ===== SINGLE ZONE BODY ===== */}
-                  {!isAllZone && (
-                    <tbody>
-                      {visibleMortality.length === 0 ? (
-                        <tr>
-                          <td colSpan={3} className="py-3 text-gray-400">
-                            No records yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        visibleMortality.map((m, i) => (
-                          <tr key={`${m.date}-${i}`} className="border-t">
-                            <td className="py-2">{m.date}</td>
-                            <td className="py-2">{m.count}</td>
-                            <td className="py-2">{m.notes ?? "-"}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  )}
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Mortality Chart */}
-          <div className={`${isAllZone ? "lg:col-span-1" : "lg:col-span-2"} bg-white rounded-2xl shadow p-4`}>
-            <h3 className="font-semibold text-lg mb-3">
-              Mortality Trend {!isAllZone && `- Zone ${selectedZone}`}
-            </h3>
-            <div className="h-64">
-              {isAllZone ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={mortalitySummaryByDate}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="A" fill="#f97316" name="Zone A" />
-                    <Bar dataKey="B" fill="#3b82f6" name="Zone B" />
-                    <Bar dataKey="C" fill="#10b981" name="Zone C" />
-                  </BarChart>
-                </ResponsiveContainer>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={visibleMortality}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="count"
-                      stroke={ZONE_COLORS[selectedZone]}
-                      dot={{ r: 4 }}
-                      name={`Mortality - Zone ${selectedZone}`}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Row: Feed & Water Consumption */}
-        <div className={`grid gap-6 mt-6 ${isAllZone ? "grid-cols-2" : "grid-cols-1 lg:grid-cols-3"}`}>
-          {/* Form & Table */}
-          {!isAllZone && (
-            <div className="bg-white rounded-2xl shadow p-4">
-              <h3 className="font-semibold text-lg mb-3">
-                Feed & Water Consumption {!isAllZone && `- Zone ${selectedZone}`}
-              </h3>
-
-              {/* ================= FORM (ONLY SINGLE ZONE) ================= */}
-              {!isAllZone && (
-                <div className="mb-4">
-                  <div className="grid grid-cols-3 gap-2 mb-3">
-                    <div>
-                      <label className="text-sm text-gray-600">Date</label>
-                      <input
-                        type="date"
-                        className="w-full border rounded-lg px-3 py-2"
-                        value={consumpDate}
-                        onChange={(e) => setConsumpDate(e.target.value)}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-sm text-gray-600">Feed (kg)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        className="w-full border rounded-lg px-3 py-2"
-                        value={feedInput}
-                        onChange={(e) => setFeedInput(Number(e.target.value))}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="text-sm text-gray-600">Water (L)</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        className="w-full border rounded-lg px-3 py-2"
-                        value={waterInput}
-                        onChange={(e) => setWaterInput(Number(e.target.value))}
-                      />
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={addConsumption}
-                    className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
-                  >
-                    Add
-                  </button>
-                </div>
-              )}
-
-              {/* ================= TABLE ================= */}
-              <div className="max-h-52 overflow-auto border rounded-lg">
-                <table className="w-full text-sm">
-                  <thead>
-                    {isAllZone ? (
-                      <tr className="text-left text-gray-500">
-                        <th className="py-2 px-2">Date</th>
-                        <th className="py-2 px-2">Zone</th>
-                        <th className="py-2 px-2">Feed (kg)</th>
-                        <th className="py-2 px-2">Water (L)</th>
-                      </tr>
-                    ) : (
-                      <tr className="text-left text-gray-500">
-                        <th className="py-2 px-2">Date</th>
-                        <th className="py-2 px-2">Feed (kg)</th>
-                        <th className="py-2 px-2">Water (L)</th>
-                      </tr>
-                    )}
-                  </thead>
-
-                  {/* ===== ALL ZONE BODY ===== */}
-                  {isAllZone && (
-                    <tbody>
-                      {consumptions.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="py-3 text-gray-400">
-                            No records yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        [...consumptions]
-                          .sort((a, b) => compareDateStrings(a.date, b.date))
-                          .map((c, i) => (
-                            <tr key={`${c.date}-${c.zone}-${i}`} className="border-t">
-                              <td className="py-2 px-2">{c.date}</td>
-                              <td className="py-2 px-2">{c.zone}</td>
-                              <td className="py-2 px-2">{c.feedKg}</td>
-                              <td className="py-2 px-2">{c.waterL}</td>
-                            </tr>
-                          ))
-                      )}
-                    </tbody>
-                  )}
-
-                  {/* ===== SINGLE ZONE BODY ===== */}
-                  {!isAllZone && (
-                    <tbody>
-                      {visibleConsumptions.length === 0 ? (
-                        <tr>
-                          <td colSpan={3} className="py-3 text-gray-400">
-                            No records yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        [...visibleConsumptions]
-                          .sort((a, b) => compareDateStrings(a.date, b.date))
-                          .map((c, i) => (
-                            <tr key={`${c.date}-${i}`} className="border-t">
-                              <td className="py-2 px-2">{c.date}</td>
-                              <td className="py-2 px-2">{c.feedKg}</td>
-                              <td className="py-2 px-2">{c.waterL}</td>
-                            </tr>
-                          ))
-                      )}
-                    </tbody>
-                  )}
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* Chart: Feed */}
-          <div className={`bg-white rounded-2xl shadow p-4 ${isAllZone ? "col-span-1" : "col-span-1"}`}>
-            <h3 className="font-semibold mb-2">
-              Daily Feed Trend {!isAllZone && `- Zone ${selectedZone}`}
-            </h3>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                {isAllZone ? (
-                  <LineChart data={consumptionChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="A"
-                      name="Feed Zone A (kg)"
-                      stroke={ZONE_COLORS.A}
-                      dot={{ r: 3 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="B"
-                      name="Feed Zone B (kg)"
-                      stroke={ZONE_COLORS.B}
-                      dot={{ r: 3 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="C"
-                      name="Feed Zone C (kg)"
-                      stroke={ZONE_COLORS.C}
-                      dot={{ r: 3 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="stdA"
-                      name="Std Feed (kg)"
-                      stroke="#aaaaaa"
-                      dot={false}
-                      strokeDasharray="4 4"
-                    />
-                  </LineChart>
-                ) : (
-                  <LineChart data={consumptionChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="feedKg"
-                      stroke={ZONE_COLORS[selectedZone]}
-                      dot={{ r: 4 }}
-                      name={`Feed Zone ${selectedZone} (kg)`}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="stdFeedKg"
-                      name="Std Feed (kg)"
-                      stroke="#aaaaaa"
-                      dot={false}
-                      strokeDasharray="4 4"
-                    />
-                  </LineChart>
-                )}
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Chart: Water */}
-          <div className="bg-white rounded-2xl shadow p-4 col-span-1">
-            <h3 className="font-semibold mb-2">
-              Daily Water Trend {!isAllZone && `- Zone ${selectedZone}`}
-            </h3>
-            <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                {isAllZone ? (
-                  <LineChart data={consumptionWaterChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="A"
-                      name="Water Zone A (L)"
-                      stroke={ZONE_COLORS.A}
-                      dot={{ r: 3 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="B"
-                      name="Water Zone B (L)"
-                      stroke={ZONE_COLORS.B}
-                      dot={{ r: 3 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="C"
-                      name="Water Zone C (L)"
-                      stroke={ZONE_COLORS.C}
-                      dot={{ r: 3 }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="stdA"
-                      name="Std Water (L)"
-                      stroke="#aaaaaa"
-                      dot={false}
-                      strokeDasharray="4 4"
-                    />
-                  </LineChart>
-                ) : (
-                  <LineChart data={consumptionWaterChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="date" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="waterL"
-                      stroke={ZONE_COLORS[selectedZone]}
-                      dot={{ r: 4 }}
-                      name={`Water Zone ${selectedZone} (L)`}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="stdWaterL"
-                      name="Std Water (L)"
-                      stroke="#aaaaaa"
-                      dot={false}
-                      strokeDasharray="4 4"
-                    />
-                  </LineChart>
-                )}
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-      </section>
-      <section className="mt-8">
-        <h2 className="text-2xl font-semibold mb-4">
-          Broiler Body Weight Monitoring
-        </h2>
-
-        <div className={`grid gap-6 ${isAllZone ? "grid-cols-1" : "grid-cols-1 lg:grid-cols-3"}`}>
-          {/* LEFT - Form & Table (ONLY SINGLE ZONE) */}
-          {!isAllZone && (
-            <div className="bg-white rounded-2xl shadow p-4">
-              <h3 className="font-semibold text-lg mb-3">
-                Broiler Weight - Zone {selectedZone}
-              </h3>
-
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div>
-                  <label className="text-sm text-gray-600">Day</label>
-                  <input
-                    type="number"
-                    min={1}
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={weightDay}
-                    onChange={(e) => setWeightDay(Number(e.target.value))}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-sm text-gray-600">
-                    Actual Weight (kg)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    className="w-full border rounded-lg px-3 py-2"
-                    value={actualWeight}
-                    onChange={(e) => setActualWeight(Number(e.target.value))}
-                  />
-                </div>
-              </div>
-
-              <button
-                onClick={addWeightEntry}
-                className="px-4 py-2 bg-blue-600 text-white rounded-lg w-full"
-              >
-                Save Entry
-              </button>
-
-              <div className="mt-4 max-h-52 overflow-auto border rounded-lg">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left text-gray-500 bg-gray-50">
-                      <th className="py-2 px-2">Day</th>
-                      <th className="py-2 px-2">Std (kg)</th>
-                      <th className="py-2 px-2">Actual (kg)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleWeights.length === 0 ? (
-                      <tr>
-                        <td
-                          colSpan={3}
-                          className="py-3 text-gray-400 text-center"
-                        >
-                          No data yet
-                        </td>
-                      </tr>
-                    ) : (
-                      visibleWeights.map((w) => (
-                        <tr key={`${w.zone}-${w.day}`} className="border-t">
-                          <td className="py-1 px-2">{w.day}</td>
-                          <td className="py-1 px-2">{w.stdWeightKg}</td>
-                          <td
-                            className={`py-1 px-2 font-medium ${
-                              w.actualWeightKg < w.stdWeightKg
-                                ? "text-red-600"
-                                : "text-green-700"
-                            }`}
-                          >
-                            {w.actualWeightKg}
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* RIGHT - Chart */}
-          <div className={`bg-white rounded-2xl shadow p-4 ${isAllZone ? "lg:col-span-1" : "lg:col-span-2"}`}>
-            <h3 className="font-semibold mb-2">
-              Daily Body Weight vs Standard {!isAllZone && `- Zone ${selectedZone}`}
-            </h3>
-
-            <div className="h-72">
-              <ResponsiveContainer width="100%" height="100%">
-                {isAllZone ? (
-                  <LineChart data={weightChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="A"
-                      name="Actual Weight Zone A (kg)"
-                      stroke={ZONE_COLORS.A}
-                      dot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="B"
-                      name="Actual Weight Zone B (kg)"
-                      stroke={ZONE_COLORS.B}
-                      dot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="C"
-                      name="Actual Weight Zone C (kg)"
-                      stroke={ZONE_COLORS.C}
-                      dot={{ r: 3 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="stdA"
-                      name="Standard Weight (kg)"
-                      stroke="#aaaaaa"
-                      strokeDasharray="4 4"
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </LineChart>
-                ) : (
-                  <LineChart data={weightChartData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="day" />
-                    <YAxis />
-                    <Tooltip />
-                    <Legend />
-                    <Line
-                      type="monotone"
-                      dataKey="actualWeightKg"
-                      name={`Actual Weight Zone ${selectedZone} (kg)`}
-                      stroke={ZONE_COLORS[selectedZone]}
-                      dot={{ r: 4 }}
-                      isAnimationActive={false}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="stdWeightKg"
-                      name="Standard Weight (kg)"
-                      stroke="#aaaaaa"
-                      strokeDasharray="4 4"
-                      dot={false}
-                      isAnimationActive={false}
-                    />
-                  </LineChart>
-                )}
-              </ResponsiveContainer>
-            </div>
-
-            {visibleWeights.length > 0 && !isAllZone && (
-              <div className="mt-3 text-sm">
-                {visibleWeights.at(-1)!.actualWeightKg <
-                visibleWeights.at(-1)!.stdWeightKg ? (
-                  <span className="text-red-600">
-                    ⚠️ Weight below standard on day {visibleWeights.at(-1)!.day}
-                  </span>
-                ) : (
-                  <span className="text-green-700">
-                    ✅ Weight meets standard
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        {!isAllZone && cycle.status === "active" && (
+          <DailyProductionLog
+            cycleId={cycle.id}
+            startDate={cycle.startDate}
+            targetHarvestDay={cycle.targetHarvestDay}
+            initialBirds={cycle.initialBirds}
+            zone={selectedZone}
+            mortalityEntries={visibleMortality}
+            consumptionEntries={visibleConsumptions}
+            weightEntries={visibleWeights}
+            onSave={saveDailyProductionLog}
+          />
+        )}
       </section>
 
       {/* System Health */}
@@ -3006,7 +2895,12 @@ PM2.5 ≤ 35 µg/m³
               : "-"}
           </div>
           <div>📦 Records: {sensorMeta?.records ?? allData.length}</div>
-          <div>🔋 Battery: 95%</div>
+          <div>
+            🧪 Data Source: Sensor Replay
+          </div>
+          <div>
+            ✅ Completeness: {harvestSummary.sensorHealth.completeness.toFixed(1)}%
+          </div>
           {sensorError && (
             <div className="sm:col-span-2 lg:col-span-5 text-red-600 text-sm">
               {sensorError}
@@ -3018,22 +2912,23 @@ PM2.5 ≤ 35 µg/m³
       <section className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mt-10">
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-5">
           <div>
-            <h2 className="text-2xl font-semibold">AI Environmental Insight</h2>
+            <h2 className="text-2xl font-semibold">Current Cycle AI & Environmental Summary</h2>
             <div className="mt-2 flex flex-wrap gap-2 text-xs">
               <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
-                Zone: {selectedZone === "ALL" ? "All Zones" : `Zone ${selectedZone}`}
+                House: {cycle.houseName}
               </span>
               <span className="px-2.5 py-1 rounded-full bg-gray-50 text-gray-600 border border-gray-200">
-                Aggregation: {appliedAggregation}
+                Cycle: {cycle.id}
               </span>
               <span className="px-2.5 py-1 rounded-full bg-gray-50 text-gray-600 border border-gray-200">
-                Records: {aggregatedData.length}
+                Records: {reportDataset.length}
               </span>
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-[minmax(260px,1fr)_180px] gap-3 w-full lg:w-[600px]">
             <select
+              aria-label="Select AI cycle analysis type"
               value={selectedInsight}
               onChange={(e) => setSelectedInsight(e.target.value)}
               className="border border-gray-300 rounded-lg px-3 py-2 bg-white"
@@ -3050,24 +2945,35 @@ PM2.5 ≤ 35 µg/m³
               disabled={isGeneratingInsight}
               className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
             >
-              {isGeneratingInsight ? "Generating..." : "Generate Insight"}
+              {isGeneratingInsight
+                ? "Generating..."
+                : hasCurrentAiInsight
+                  ? "Regenerate AI Summary"
+                  : "Generate AI Summary"}
             </button>
+            <span className="text-right text-xs text-gray-500 sm:col-span-2">
+              {hasCurrentAiInsight
+                ? "AI-assisted summary for the selected analysis type"
+                : hasRequestedCurrentInsight && aiError
+                  ? "Verified rule-based summary"
+                  : "AI runs only after user clicks Generate AI Summary"}
+            </span>
           </div>
         </div>
 
-        {aiError && (
-          <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        {aiError && hasRequestedCurrentInsight && (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
             {aiError}
           </div>
         )}
 
         {isGeneratingInsight && (
           <div className="rounded-lg border border-blue-100 bg-blue-50 p-4 text-sm text-blue-700">
-            Preparing AI analysis from the selected sensor window...
+            Preparing cycle analysis from production, alert, and sensor records...
           </div>
         )}
 
-        {aiInsight && !isGeneratingInsight && (
+        {!isGeneratingInsight && showInsightContent && (
           <div className="rounded-lg border border-gray-200 bg-slate-50 p-5">
             <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-5">
               <aside className="space-y-3">
@@ -3076,10 +2982,10 @@ PM2.5 ≤ 35 µg/m³
                     Insight Type
                   </p>
                   <p className="mt-1 font-semibold text-gray-900">
-                    {
-                      INSIGHT_OPTIONS.find((opt) => opt.value === selectedInsight)
-                        ?.label
-                    }
+                    {hasCurrentAiInsight
+                      ? INSIGHT_OPTIONS.find((opt) => opt.value === selectedInsight)
+                          ?.label
+                      : "Verified Rule-Based Cycle Summary"}
                   </p>
                 </div>
                 <div className="rounded-lg bg-white border border-gray-200 p-4">
@@ -3137,10 +3043,22 @@ PM2.5 ≤ 35 µg/m³
             </div>
           </div>
         )}
+
+        {!isGeneratingInsight && !showInsightContent && (
+          <div className="rounded-xl border border-dashed border-blue-200 bg-blue-50/50 px-5 py-8 text-center">
+            <h3 className="font-semibold text-gray-900">
+              AI cycle summary has not been generated
+            </h3>
+            <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-gray-600">
+              Select the analysis type, then click Generate AI Summary. No AI
+              request is sent when the page loads or when the selection changes.
+            </p>
+          </div>
+        )}
       </section>
 
       {/* Footer Section */}
-      <footer className="mt-10 py-6 border-t text-center text-sm text-gray-600">
+      <footer className="order-3 mt-10 border-t py-6 text-center text-sm text-gray-600">
         <p className="mb-2">© 2026 UMPSA • MOHE • IMaP. All rights reserved.</p>
         <p className="mb-4">Contact: kamarul@umpsa.edu.my</p>
         <p className="text-xs leading-relaxed">

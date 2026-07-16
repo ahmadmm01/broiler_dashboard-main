@@ -1,5 +1,13 @@
 export type Zone = "A" | "B" | "C";
 
+export type VideoSourceMode = "dummy" | "rtsp";
+
+export type VideoSourceConfigResponse = {
+  mode: VideoSourceMode;
+  streamEndpoint: string;
+  zones: Record<Zone, { configured: boolean }>;
+};
+
 export type DataPoint = {
   time: string;
   dayLabel: string;
@@ -12,6 +20,7 @@ export type DataPoint = {
 };
 
 export type WeightEntry = {
+  cycleId?: string;
   zone: Zone;
   day: number;
   stdWeightKg: number;
@@ -19,6 +28,7 @@ export type WeightEntry = {
 };
 
 export type MortalityEntry = {
+  cycleId?: string;
   zone: Zone;
   date: string;
   count: number;
@@ -26,6 +36,7 @@ export type MortalityEntry = {
 };
 
 export type ConsumptionEntry = {
+  cycleId?: string;
   zone: Zone;
   date: string;
   feedKg: number;
@@ -67,4 +78,51 @@ export type SensorApiResponse = {
     runtimeEnd: string;
     records: number;
   };
+};
+
+export type SensorMetric = "temp" | "humidity" | "co2" | "nh3" | "pm25";
+
+export type AlertSeverity = "warning" | "critical";
+export type AlertStatus = "active" | "acknowledged" | "resolved";
+
+export type AlertEvent = {
+  id: string;
+  cycleId?: string;
+  metric: SensorMetric;
+  label: string;
+  timestamp: string;
+  value: number;
+  threshold: number;
+  unit: string;
+  severity: AlertSeverity;
+  status: AlertStatus;
+  message: string;
+};
+
+export type CycleStatus = "draft" | "active" | "completed";
+
+export type CycleAuditEvent = {
+  id: string;
+  type: "started" | "updated" | "completed" | "reopened";
+  timestamp: string;
+  reason?: string;
+};
+
+export type ProductionCycle = {
+  id: string;
+  houseName: string;
+  startDate: string;
+  targetHarvestDay: number;
+  initialBirds: number;
+  initialAverageWeightKg: number;
+  harvestedBirds: number;
+  notes: string;
+  status: CycleStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  actualHarvestDate?: string;
+  completionNotes?: string;
+  revision: number;
+  auditLog: CycleAuditEvent[];
 };

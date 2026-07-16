@@ -19,6 +19,12 @@ export const formatDate = (date: Date) => {
   return `${year}-${month}-${day}`;
 };
 
+export const formatDateTime = (date: Date) => {
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${formatDate(date)} ${hours}:${minutes}`;
+};
+
 export const parseDateOnly = (value: string) => {
   const [year, month, day] = value.slice(0, 10).split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -34,7 +40,11 @@ export const dateToDayNumber = (date: string, startDate: string) =>
   Math.max(1, diffDays(parseDateOnly(startDate), parseDateOnly(date)) + 1);
 
 export const dayLabel = (date: Date) =>
-  `${date.getDate()}/${date.getMonth() + 1}`;
+  `${String(date.getDate()).padStart(2, "0")}/${String(
+    date.getMonth() + 1
+  ).padStart(2, "0")} ${String(date.getHours()).padStart(2, "0")}:${String(
+    date.getMinutes()
+  ).padStart(2, "0")}`;
 
 export const compareDateStrings = (a: string, b: string) =>
   parseDateOnly(a).getTime() - parseDateOnly(b).getTime();

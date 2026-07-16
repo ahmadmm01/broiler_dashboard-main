@@ -2,7 +2,7 @@ import {
   addDays,
   dayLabel,
   diffDays,
-  formatDate,
+  formatDateTime,
   getRollingSensorRange,
   parseDateOnly,
 } from "./dateUtils";
@@ -42,7 +42,7 @@ export function mapRawSensorItems(
       );
     }
 
-    const timestamp = formatDate(date);
+    const timestamp = formatDateTime(date);
 
     return {
       time: timestamp,

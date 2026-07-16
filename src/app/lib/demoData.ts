@@ -1,4 +1,8 @@
-import { standardBroilerWeight } from "./broilerStandard";
+import {
+  standardBroilerFeedKg,
+  standardBroilerWaterL,
+  standardBroilerWeight,
+} from "./broilerStandard";
 import { addDays, formatDate, getDemoWindowStart } from "./dateUtils";
 import type { ConsumptionEntry, MortalityEntry, WeightEntry, Zone } from "./types";
 
@@ -9,19 +13,11 @@ function seededUnit(day: number, zone: Zone) {
   return seed - Math.floor(seed);
 }
 
-function standardFeedKg(day: number): number {
-  return +(0.05 + 0.015 * Math.pow(day, 1.15)).toFixed(3);
-}
-
-function standardWaterL(day: number): number {
-  return +(standardFeedKg(day) * 2.2).toFixed(3);
-}
-
 export function createDemoWeightEntries(): WeightEntry[] {
   const dummyWeights: WeightEntry[] = [];
 
   ZONES.forEach((zone) => {
-    for (let day = 1; day <= 30; day++) {
+    for (let day = 1; day <= 37; day++) {
       const stdWeight = standardBroilerWeight(day);
       let variance = (seededUnit(day, zone) - 0.5) * 0.025;
       if (zone === "A") variance += 0.006;
@@ -50,43 +46,42 @@ export function createDemoMortalityEntries(): MortalityEntry[] {
     { zone: "A", date: weekly[0], count: 1 },
     { zone: "B", date: weekly[0], count: 1 },
     { zone: "C", date: weekly[0], count: 0 },
-
     { zone: "A", date: weekly[1], count: 0 },
     { zone: "B", date: weekly[1], count: 2, notes: "Ventilation issue" },
     { zone: "C", date: weekly[1], count: 1 },
-
     { zone: "A", date: weekly[2], count: 1 },
     { zone: "B", date: weekly[2], count: 1 },
     { zone: "C", date: weekly[2], count: 0 },
-
     { zone: "A", date: weekly[3], count: 0 },
     { zone: "B", date: weekly[3], count: 2 },
     { zone: "C", date: weekly[3], count: 1, notes: "Dust build-up" },
-
     { zone: "A", date: weekly[4], count: 1 },
     { zone: "B", date: weekly[4], count: 0 },
     { zone: "C", date: weekly[4], count: 2, notes: "Feed contamination" },
-
     { zone: "A", date: weekly[5], count: 0 },
     { zone: "B", date: weekly[5], count: 1 },
     { zone: "C", date: weekly[5], count: 0 },
-
     { zone: "A", date: weekly[6], count: 2, notes: "Heat wave" },
-    { zone: "B", date: weekly[6], count: 2, notes: "Heat and ventilation stress" },
+    {
+      zone: "B",
+      date: weekly[6],
+      count: 2,
+      notes: "Heat and ventilation stress",
+    },
     { zone: "C", date: weekly[6], count: 1 },
   ];
 }
 
 export function createDemoConsumptionEntries(): ConsumptionEntry[] {
   const startDate = getDemoWindowStart();
-  const dates = Array.from({ length: 7 }, (_, index) =>
+  const dates = Array.from({ length: 37 }, (_, index) =>
     formatDate(addDays(startDate, index))
   );
 
   return dates.flatMap((date, index) => {
     const day = index + 1;
-    const feedStd = standardFeedKg(day);
-    const waterStd = standardWaterL(day);
+    const feedStd = standardBroilerFeedKg(day);
+    const waterStd = standardBroilerWaterL(day);
 
     return [
       {
