@@ -1,11 +1,12 @@
 import { readFile } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
+import { formatDate, getRollingSensorRange } from "@/app/lib/dateUtils";
 import {
-  formatDate,
-  getRollingSensorRange,
-} from "@/app/lib/dateUtils";
-import { mapRawSensorItems } from "@/app/lib/sensorData";
+  alignSensorSeriesEnd,
+  interpolateSensorSeries,
+  mapRawSensorItems,
+} from "@/app/lib/sensorData";
 import type { RawSensorItem, SensorApiResponse } from "@/app/lib/types";
 
 export async function GET() {
@@ -14,15 +15,19 @@ export async function GET() {
     const raw = await readFile(filePath, "utf-8");
     const json = JSON.parse(raw) as RawSensorItem[];
     const range = getRollingSensorRange(json);
+    const anchors = alignSensorSeriesEnd(mapRawSensorItems(json));
+    const data = interpolateSensorSeries(anchors, 1);
 
     const response: SensorApiResponse = {
-      data: mapRawSensorItems(json),
+      data,
       meta: {
         sourceStart: formatDate(range.sourceStart),
         sourceEnd: formatDate(range.sourceEnd),
-        runtimeStart: formatDate(range.targetStart),
-        runtimeEnd: formatDate(range.targetEnd),
-        records: json.length,
+        runtimeStart: data.at(0)?.time ?? formatDate(range.targetStart),
+        runtimeEnd: data.at(-1)?.time ?? formatDate(range.targetEnd),
+        records: data.length,
+        sourceRecords: json.length,
+        intervalMinutes: 1,
       },
     };
 

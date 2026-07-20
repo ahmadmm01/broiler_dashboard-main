@@ -1,7 +1,8 @@
 import type { RawSensorItem } from "./types";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
-export const DEMO_SENSOR_SPAN_DAYS = 36;
+export const DEMO_CURRENT_CYCLE_DAY = 30;
+export const DEMO_SENSOR_SPAN_DAYS = DEMO_CURRENT_CYCLE_DAY - 1;
 
 export const startOfDay = (date = new Date()) =>
   new Date(date.getFullYear(), date.getMonth(), date.getDate());

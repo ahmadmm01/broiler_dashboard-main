@@ -1,4 +1,5 @@
 import {
+  addDays,
   dateToDayNumber,
   formatDate,
   getDemoWindowStart,
@@ -44,46 +45,73 @@ export type HarvestSummary = {
   sensorHealth: SensorHealthSummary;
 };
 
-export function createDemoProductionCycle(): ProductionCycle {
-  const startDate = formatDate(getDemoWindowStart());
-  const startedAt = `${startDate}T00:00:00.000Z`;
+const demoZoneStartOffsets: Record<Zone, number> = {
+  A: 0,
+  B: 7,
+  C: 16,
+};
 
-  return {
-    id: `CYCLE-ACTIVE-${startDate.replaceAll("-", "")}`,
-    houseName: "Poultry House 1",
-    startDate,
-    targetHarvestDay: 37,
-    initialBirds: 5000,
-    initialAverageWeightKg: 0.044,
-    harvestedBirds: 0,
-    notes: "Pilot cycle prepared for operational review.",
-    status: "active",
-    createdAt: startedAt,
-    updatedAt: startedAt,
-    revision: 1,
-    auditLog: [
-      {
-        id: `started-${startedAt}`,
-        type: "started",
-        timestamp: startedAt,
-        reason: "Demo production cycle initialized.",
-      },
-    ],
-  };
+export function createDemoProductionCycles(): Record<Zone, ProductionCycle> {
+  const windowStart = getDemoWindowStart();
+
+  return Object.fromEntries(
+    (["A", "B", "C"] as Zone[]).map((zone) => {
+      const startDate = formatDate(addDays(windowStart, demoZoneStartOffsets[zone]));
+      const startedAt = `${startDate}T00:00:00.000Z`;
+
+      return [
+        zone,
+        {
+          id: `CYCLE-${zone}-ACTIVE-${startDate.replaceAll("-", "")}`,
+          zone,
+          houseName: "Poultry House 1",
+          startDate,
+          targetHarvestDay: 37,
+          initialBirds: 5000,
+          initialAverageWeightKg: 0.044,
+          harvestedBirds: 0,
+          notes: "Pilot cycle prepared for operational review.",
+          status: "active",
+          createdAt: startedAt,
+          updatedAt: startedAt,
+          revision: 1,
+          auditLog: [
+            {
+              id: `started-${zone}-${startedAt}`,
+              type: "started",
+              timestamp: startedAt,
+              reason: `Demo production cycle initialized for Zone ${zone}.`,
+            },
+          ],
+        } satisfies ProductionCycle,
+      ];
+    })
+  ) as Record<Zone, ProductionCycle>;
+}
+
+export function createDemoProductionCycle(): ProductionCycle {
+  return createDemoProductionCycles().A;
 }
 
 export function calculateSensorHealth(
   data: DataPoint[],
   targetHarvestDay: number
 ): SensorHealthSummary {
-  const expectedRecords = Math.max(1, targetHarvestDay * 4);
+  const expectedRecords =
+    data.length > 1
+      ? Math.max(
+          1,
+          Math.round((data.at(-1)!.ts - data[0].ts) / (60 * 1000)) + 1
+        )
+      : Math.max(1, targetHarvestDay * 24 * 60);
   const receivedRecords = data.length;
   const completeness = Math.min(100, (receivedRecords / expectedRecords) * 100);
   const gaps = data
     .slice(1)
     .map((point, index) => (point.ts - data[index].ts) / (60 * 60 * 1000));
   const largestGapHours = gaps.length ? Math.max(...gaps) : 0;
-  const issueCount = Number(completeness < 95) + Number(largestGapHours > 12);
+  const issueCount =
+    Number(completeness < 95) + Number(largestGapHours > 2.5 / 60);
 
   return {
     status: issueCount ? "Review Required" : "Healthy",

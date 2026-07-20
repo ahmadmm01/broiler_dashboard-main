@@ -77,6 +77,8 @@ export type SensorApiResponse = {
     runtimeStart: string;
     runtimeEnd: string;
     records: number;
+    sourceRecords: number;
+    intervalMinutes: number;
   };
 };
 
@@ -88,6 +90,7 @@ export type AlertStatus = "active" | "acknowledged" | "resolved";
 export type AlertEvent = {
   id: string;
   cycleId?: string;
+  zone: Zone;
   metric: SensorMetric;
   label: string;
   timestamp: string;
@@ -110,6 +113,7 @@ export type CycleAuditEvent = {
 
 export type ProductionCycle = {
   id: string;
+  zone: Zone;
   houseName: string;
   startDate: string;
   targetHarvestDay: number;

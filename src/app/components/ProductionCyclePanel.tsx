@@ -102,7 +102,7 @@ export default function ProductionCyclePanel({
   const openStartCycle = () => {
     const today = todayDate();
     setStartDraft({
-      id: `CYCLE-${today.replaceAll("-", "")}`,
+      id: `CYCLE-${cycle.zone}-${today.replaceAll("-", "")}`,
       houseName: cycle.houseName,
       startDate: today,
       targetHarvestDay: 37,
@@ -154,7 +154,7 @@ export default function ProductionCyclePanel({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-2xl font-semibold">
-              Production Cycle Management
+              Production Cycle Management · Zone {cycle.zone}
             </h2>
             <span
               className={`rounded-full border px-2.5 py-1 text-xs ${
@@ -234,7 +234,7 @@ export default function ProductionCyclePanel({
       <div className="mb-5 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         {[
           ["Cycle ID", cycle.id],
-          ["House", cycle.houseName],
+          ["House / zone", `${cycle.houseName} · Zone ${cycle.zone}`],
           ["Start date", cycle.startDate],
           ["Ideal cycle length", `${cycle.targetHarvestDay} days`],
           ["Lifecycle status", cycle.status.toUpperCase()],

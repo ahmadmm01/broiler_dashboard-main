@@ -8,6 +8,39 @@ import {
 } from "./dateUtils";
 import type { DataPoint, RawSensorItem, Zone } from "./types";
 
+const SENSOR_MINUTE_MS = 60 * 1000;
+const SENSOR_METRICS = ["temp", "humidity", "co2", "nh3", "pm25"] as const;
+
+const metricAmplitude: Record<(typeof SENSOR_METRICS)[number], number> = {
+  temp: 0.08,
+  humidity: 0.18,
+  co2: 5,
+  nh3: 0.015,
+  pm25: 0.08,
+};
+
+const metricPhase: Record<(typeof SENSOR_METRICS)[number], number> = {
+  temp: 0.4,
+  humidity: 1.2,
+  co2: 2.1,
+  nh3: 2.8,
+  pm25: 3.6,
+};
+
+const roundSensorMetric = (
+  metric: (typeof SENSOR_METRICS)[number],
+  value: number
+) => (metric === "co2" ? Math.round(value) : round(value, 2));
+
+const clampSensorMetric = (
+  metric: (typeof SENSOR_METRICS)[number],
+  value: number
+) => {
+  if (metric === "humidity") return clamp(value, 0, 100);
+  if (metric === "temp") return clamp(value, -20, 60);
+  return Math.max(0, value);
+};
+
 export function mapRawSensorItems(
   json: RawSensorItem[],
   targetDate = new Date()
@@ -55,6 +88,116 @@ export function mapRawSensorItems(
       pm25: Number(item["PM2.5 (µg/m³)"]),
     };
   });
+}
+
+export function alignSensorSeriesEnd(
+  data: DataPoint[],
+  targetDate = new Date()
+): DataPoint[] {
+  const latest = data.at(-1);
+  if (!latest) return data;
+
+  const alignedEnd = new Date(targetDate);
+  alignedEnd.setSeconds(0, 0);
+  const shiftMs = alignedEnd.getTime() - latest.ts;
+
+  return data.map((point) => {
+    const shiftedDate = new Date(point.ts + shiftMs);
+    return {
+      ...point,
+      ts: shiftedDate.getTime(),
+      time: formatDateTime(shiftedDate),
+      dayLabel: dayLabel(shiftedDate),
+    };
+  });
+}
+
+export function interpolateSensorSeries(
+  data: DataPoint[],
+  intervalMinutes = 1
+): DataPoint[] {
+  if (data.length <= 1) return data;
+
+  const intervalMs = Math.max(1, intervalMinutes) * SENSOR_MINUTE_MS;
+  const sorted = [...data].sort((left, right) => left.ts - right.ts);
+  const interpolated: DataPoint[] = [];
+  let generatedIndex = 0;
+
+  for (let pairIndex = 0; pairIndex < sorted.length - 1; pairIndex += 1) {
+    const current = sorted[pairIndex];
+    const next = sorted[pairIndex + 1];
+    const gapMs = next.ts - current.ts;
+
+    if (gapMs <= 0) continue;
+
+    for (
+      let timestamp = current.ts;
+      timestamp < next.ts;
+      timestamp += intervalMs
+    ) {
+      const progress = (timestamp - current.ts) / gapMs;
+      const smoothProgress = progress * progress * (3 - 2 * progress);
+      const envelope = Math.sin(Math.PI * progress);
+      const date = new Date(timestamp);
+      const point: DataPoint = {
+        time: formatDateTime(date),
+        dayLabel: dayLabel(date),
+        ts: timestamp,
+        temp: 0,
+        humidity: 0,
+        co2: 0,
+        nh3: 0,
+        pm25: 0,
+      };
+
+      SENSOR_METRICS.forEach((metric) => {
+        const baseline =
+          current[metric] + (next[metric] - current[metric]) * smoothProgress;
+        const microVariation =
+          envelope *
+          Math.sin(generatedIndex * 0.19 + metricPhase[metric]) *
+          metricAmplitude[metric];
+        point[metric] = roundSensorMetric(
+          metric,
+          clampSensorMetric(metric, baseline + microVariation)
+        );
+      });
+
+      interpolated.push(point);
+      generatedIndex += 1;
+    }
+  }
+
+  interpolated.push(sorted.at(-1)!);
+  return interpolated;
+}
+
+export function createNextRealtimeSensorPoint(
+  previous: DataPoint,
+  sequence: number
+): DataPoint {
+  const date = new Date(previous.ts + SENSOR_MINUTE_MS);
+  const next: DataPoint = {
+    ...previous,
+    ts: date.getTime(),
+    time: formatDateTime(date),
+    dayLabel: dayLabel(date),
+  };
+
+  SENSOR_METRICS.forEach((metric) => {
+    const phase = metricPhase[metric];
+    const frequency = metric === "co2" ? 0.11 : 0.08;
+    const boundedDelta =
+      metricAmplitude[metric] *
+      (Math.sin((sequence + 1) * frequency + phase) -
+        Math.sin(sequence * frequency + phase));
+    next[metric] = roundSensorMetric(
+      metric,
+      clampSensorMetric(metric, previous[metric] + boundedDelta)
+    );
+  });
+
+  return next;
 }
 
 export function summarizeData(data: DataPoint[]) {

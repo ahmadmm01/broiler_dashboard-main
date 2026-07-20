@@ -69,7 +69,15 @@ export function createHistoricalCycleAnalysis(
   cycle: HistoricalCycle
 ): HistoricalCycleAnalysis {
   const records = cycle.data.length;
-  const expectedRecords = cycle.harvestDay * 4;
+  const expectedRecords =
+    cycle.data.length > 1
+      ? Math.max(
+          1,
+          Math.round(
+            (cycle.data.at(-1)!.ts - cycle.data[0].ts) / (60 * 1000)
+          ) + 1
+        )
+      : cycle.harvestDay * 24 * 60;
   const values = {
     temp: cycle.data.map((point) => point.temp),
     humidity: cycle.data.map((point) => point.humidity),

@@ -40,6 +40,11 @@ export type CyclePredictionBaseline = {
 
 export type CyclePredictionAdvice = {
   summary: string;
+  zoneSummaries?: Array<{
+    zone: Zone;
+    riskLevel: PredictionRiskLevel;
+    summary: string;
+  }>;
   keyRisks: Array<{
     title: string;
     evidence: string;
@@ -295,6 +300,13 @@ export function createCurrentCyclePrediction({
     baseline,
     fallbackAdvice: {
       summary: `${stageText} If the recorded trend continues, average weight is projected at ${baseline.projectedAverageWeightKg.toFixed(3)} kg per bird with approximately ${baseline.projectedSurvivingBirds.toLocaleString()} birds remaining. Overall operational risk is ${riskLevel.toLowerCase()}.`,
+      zoneSummaries: [
+        {
+          zone,
+          riskLevel,
+          summary: `Projected average weight is ${baseline.projectedAverageWeightKg.toFixed(3)} kg with ${baseline.mortalityRate.toFixed(2)}% recorded mortality, FCR ${baseline.fcr.toFixed(2)}, and ${baseline.sensorCompleteness.toFixed(1)}% sensor completeness.`,
+        },
+      ],
       keyRisks: keyRisks.slice(0, 4),
       priorityActions: priorityActions.slice(0, 5),
       monitoringFocus: Array.from(monitoringFocus).slice(0, 5),

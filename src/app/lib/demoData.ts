@@ -3,7 +3,12 @@ import {
   standardBroilerWaterL,
   standardBroilerWeight,
 } from "./broilerStandard";
-import { addDays, formatDate, getDemoWindowStart } from "./dateUtils";
+import {
+  addDays,
+  dateToDayNumber,
+  formatDate,
+} from "./dateUtils";
+import { createDemoProductionCycles } from "./cycleAnalytics";
 import type { ConsumptionEntry, MortalityEntry, WeightEntry, Zone } from "./types";
 
 const ZONES: Zone[] = ["A", "B", "C"];
@@ -15,9 +20,13 @@ function seededUnit(day: number, zone: Zone) {
 
 export function createDemoWeightEntries(): WeightEntry[] {
   const dummyWeights: WeightEntry[] = [];
+  const cycles = createDemoProductionCycles();
+  const currentDate = formatDate(new Date());
 
   ZONES.forEach((zone) => {
-    for (let day = 1; day <= 37; day++) {
+    const cycle = cycles[zone];
+    const currentDay = dateToDayNumber(currentDate, cycle.startDate);
+    for (let day = 1; day <= currentDay; day++) {
       const stdWeight = standardBroilerWeight(day);
       let variance = (seededUnit(day, zone) - 0.5) * 0.025;
       if (zone === "A") variance += 0.006;
@@ -25,6 +34,7 @@ export function createDemoWeightEntries(): WeightEntry[] {
       if (zone === "C") variance -= 0.032;
 
       dummyWeights.push({
+        cycleId: cycle.id,
         zone,
         day,
         stdWeightKg: stdWeight,
@@ -37,71 +47,58 @@ export function createDemoWeightEntries(): WeightEntry[] {
 }
 
 export function createDemoMortalityEntries(): MortalityEntry[] {
-  const startDate = getDemoWindowStart();
-  const weekly = [0, 7, 14, 21, 28, 35, 36].map((offset) =>
-    formatDate(addDays(startDate, offset))
-  );
+  const cycles = createDemoProductionCycles();
+  const currentDate = formatDate(new Date());
+  const counts: Record<Zone, number[]> = {
+    A: [1, 0, 1, 0, 1, 2],
+    B: [1, 2, 1, 2, 0, 2],
+    C: [0, 1, 0, 1, 2, 1],
+  };
+  const notes: Partial<Record<Zone, Record<number, string>>> = {
+    A: { 29: "Heat wave" },
+    B: { 8: "Ventilation issue", 22: "Heat and ventilation stress" },
+    C: { 8: "Dust build-up", 13: "Feed contamination" },
+  };
 
-  return [
-    { zone: "A", date: weekly[0], count: 1 },
-    { zone: "B", date: weekly[0], count: 1 },
-    { zone: "C", date: weekly[0], count: 0 },
-    { zone: "A", date: weekly[1], count: 0 },
-    { zone: "B", date: weekly[1], count: 2, notes: "Ventilation issue" },
-    { zone: "C", date: weekly[1], count: 1 },
-    { zone: "A", date: weekly[2], count: 1 },
-    { zone: "B", date: weekly[2], count: 1 },
-    { zone: "C", date: weekly[2], count: 0 },
-    { zone: "A", date: weekly[3], count: 0 },
-    { zone: "B", date: weekly[3], count: 2 },
-    { zone: "C", date: weekly[3], count: 1, notes: "Dust build-up" },
-    { zone: "A", date: weekly[4], count: 1 },
-    { zone: "B", date: weekly[4], count: 0 },
-    { zone: "C", date: weekly[4], count: 2, notes: "Feed contamination" },
-    { zone: "A", date: weekly[5], count: 0 },
-    { zone: "B", date: weekly[5], count: 1 },
-    { zone: "C", date: weekly[5], count: 0 },
-    { zone: "A", date: weekly[6], count: 2, notes: "Heat wave" },
-    {
-      zone: "B",
-      date: weekly[6],
-      count: 2,
-      notes: "Heat and ventilation stress",
-    },
-    { zone: "C", date: weekly[6], count: 1 },
-  ];
+  return ZONES.flatMap((zone) => {
+    const cycle = cycles[zone];
+    const currentDay = dateToDayNumber(currentDate, cycle.startDate);
+    const offsets = Array.from(
+      new Set([0, 7, 14, 21, 28, currentDay - 1].filter((offset) => offset >= 0 && offset < currentDay))
+    ).sort((left, right) => left - right);
+
+    return offsets.map((offset, index) => ({
+      cycleId: cycle.id,
+      zone,
+      date: formatDate(addDays(new Date(`${cycle.startDate}T00:00:00`), offset)),
+      count: counts[zone][Math.min(index, counts[zone].length - 1)],
+      notes: notes[zone]?.[offset + 1],
+    }));
+  });
 }
 
 export function createDemoConsumptionEntries(): ConsumptionEntry[] {
-  const startDate = getDemoWindowStart();
-  const dates = Array.from({ length: 37 }, (_, index) =>
-    formatDate(addDays(startDate, index))
-  );
+  const cycles = createDemoProductionCycles();
+  const currentDate = formatDate(new Date());
+  const feedBase: Record<Zone, number> = { A: 0.99, B: 1.03, C: 0.91 };
+  const waterBase: Record<Zone, number> = { A: 0.99, B: 1.04, C: 0.92 };
 
-  return dates.flatMap((date, index) => {
-    const day = index + 1;
-    const feedStd = standardBroilerFeedKg(day);
-    const waterStd = standardBroilerWaterL(day);
+  return ZONES.flatMap((zone) => {
+    const cycle = cycles[zone];
+    const currentDay = dateToDayNumber(currentDate, cycle.startDate);
 
-    return [
-      {
-        zone: "A" as const,
-        date,
-        feedKg: +(feedStd * (0.99 + seededUnit(day, "A") * 0.02)).toFixed(3),
-        waterL: +(waterStd * (0.99 + seededUnit(day + 10, "A") * 0.02)).toFixed(3),
-      },
-      {
-        zone: "B" as const,
-        date,
-        feedKg: +(feedStd * (1.03 + seededUnit(day, "B") * 0.025)).toFixed(3),
-        waterL: +(waterStd * (1.04 + seededUnit(day + 10, "B") * 0.025)).toFixed(3),
-      },
-      {
-        zone: "C" as const,
-        date,
-        feedKg: +(feedStd * (0.91 + seededUnit(day, "C") * 0.025)).toFixed(3),
-        waterL: +(waterStd * (0.92 + seededUnit(day + 10, "C") * 0.025)).toFixed(3),
-      },
-    ];
+    return Array.from({ length: currentDay }, (_, index) => {
+      const day = index + 1;
+      const feedStd = standardBroilerFeedKg(day);
+      const waterStd = standardBroilerWaterL(day);
+
+      return {
+        cycleId: cycle.id,
+        zone,
+        date: formatDate(addDays(new Date(`${cycle.startDate}T00:00:00`), index)),
+        feedKg: +(feedStd * (feedBase[zone] + seededUnit(day, zone) * 0.025)).toFixed(3),
+        waterL: +(waterStd * (waterBase[zone] + seededUnit(day + 10, zone) * 0.025)).toFixed(3),
+      };
+    });
   });
 }

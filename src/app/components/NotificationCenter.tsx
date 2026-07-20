@@ -69,7 +69,7 @@ export default function NotificationCenter({
                   <div className="flex justify-between gap-3">
                     <div>
                       <div className="font-semibold text-sm">
-                        {alert.label} · {alert.severity}
+                        Zone {alert.zone} · {alert.label} · {alert.severity}
                       </div>
                       <div className="text-xs text-gray-600">
                         {alert.value.toFixed(2)} {alert.unit} · limit {alert.threshold} {alert.unit}

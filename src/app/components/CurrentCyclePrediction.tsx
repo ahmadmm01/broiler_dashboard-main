@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { HarvestSummary } from "../lib/cycleAnalytics";
 import {
   createCurrentCyclePrediction,
   type CyclePredictionAdvice,
+  type CyclePredictionBaseline,
   type PredictionRiskLevel,
 } from "../lib/cyclePrediction";
 import type { DataPoint, ProductionCycle, Zone } from "../lib/types";
@@ -17,57 +18,196 @@ const riskStyle: Record<PredictionRiskLevel, string> = {
   High: "border-red-200 bg-red-50 text-red-700",
 };
 
-export default function CurrentCyclePrediction({
-  cycle,
-  summary,
-  sensorData,
-  zone,
-}: {
+const zoneAccent: Record<Zone, string> = {
+  A: "#f97316",
+  B: "#3b82f6",
+  C: "#10b981",
+};
+
+const riskRank: Record<PredictionRiskLevel, number> = {
+  Low: 0,
+  Moderate: 1,
+  High: 2,
+};
+
+export type CurrentCyclePredictionInput = {
+  zone: Zone;
   cycle: ProductionCycle;
   summary: HarvestSummary;
   sensorData: DataPoint[];
-  zone: Zone;
-}) {
-  const prediction = useMemo(
-    () =>
-      createCurrentCyclePrediction({
-        cycle,
-        harvest: summary,
-        sensorData,
-        zone,
-      }),
-    [cycle, sensorData, summary, zone]
+};
+
+function combineZoneAdvice(
+  predictions: Array<{
+    zone: Zone;
+    riskLevel: PredictionRiskLevel;
+    baseline: CyclePredictionBaseline;
+    fallbackAdvice: CyclePredictionAdvice;
+  }>,
+  overallRisk: PredictionRiskLevel
+): CyclePredictionAdvice {
+  if (predictions.length === 1) return predictions[0].fallbackAdvice;
+
+  const prioritizedPredictions = [...predictions].sort(
+    (left, right) => riskRank[right.riskLevel] - riskRank[left.riskLevel]
   );
-  const baselineSignature = JSON.stringify(prediction.baseline);
-  const [aiResult, setAiResult] = useState<{
-    signature: string;
+  const keyRisks = prioritizedPredictions
+    .flatMap(({ zone, fallbackAdvice }) =>
+      fallbackAdvice.keyRisks.slice(0, 2).map((risk) => ({
+        ...risk,
+        title: `Zone ${zone} · ${risk.title}`,
+      }))
+    )
+    .slice(0, 4);
+  const priorityActions = prioritizedPredictions
+    .flatMap(({ zone, fallbackAdvice }) =>
+      fallbackAdvice.priorityActions.slice(0, 2).map((item) => ({
+        ...item,
+        action: `Zone ${zone}: ${item.action}`,
+      }))
+    )
+    .slice(0, 5);
+  const monitoringFocus = prioritizedPredictions
+    .flatMap(({ zone, fallbackAdvice }) =>
+      fallbackAdvice.monitoringFocus
+        .slice(0, 2)
+        .map((item) => `Zone ${zone}: ${item}`)
+    )
+    .slice(0, 5);
+
+  return {
+    summary: `The current-cycle comparison covers Zones ${predictions
+      .map(({ zone }) => zone)
+      .join(", ")}. The highest current operational risk across the active zones is ${overallRisk.toLowerCase()}. Review each zone condition before applying any house-wide action.`,
+    zoneSummaries: predictions.map(({ zone, riskLevel, baseline }) => ({
+      zone,
+      riskLevel,
+      summary: `At cycle day ${baseline.currentDay} of ${baseline.targetHarvestDay}, recorded mortality is ${baseline.mortalityRate.toFixed(2)}% with FCR ${baseline.fcr.toFixed(2)} and ${baseline.sensorCompleteness.toFixed(1)}% sensor completeness. Environmental peaks were ${baseline.sensor.temperaturePeak.toFixed(2)} °C, ${baseline.sensor.co2Peak.toFixed(0)} ppm CO₂, ${baseline.sensor.nh3Peak.toFixed(2)} ppm NH₃, and ${baseline.sensor.pm25Peak.toFixed(2)} µg/m³ PM2.5.`,
+    })),
+    keyRisks,
+    priorityActions,
+    monitoringFocus,
+  };
+}
+
+function formatHarvestTiming(
+  currentDay: number,
+  targetHarvestDay: number,
+  daysRemaining: number
+) {
+  if (daysRemaining > 0) return `${daysRemaining} days remaining`;
+  if (currentDay === targetHarvestDay) return `Day ${targetHarvestDay} reached`;
+  return `${currentDay - targetHarvestDay} days beyond ideal`;
+}
+
+export default function CurrentCyclePrediction({
+  inputs,
+}: {
+  inputs: CurrentCyclePredictionInput[];
+}) {
+  const predictions = useMemo(
+    () =>
+      inputs.map(({ zone, cycle, summary, sensorData }) => ({
+        zone,
+        cycle,
+        ...createCurrentCyclePrediction({
+          cycle,
+          harvest: summary,
+          sensorData,
+          zone,
+        }),
+      })),
+    [inputs]
+  );
+  const baselines = predictions.map((prediction) => prediction.baseline);
+  const isMultiZone = predictions.length > 1;
+  const primaryPrediction = predictions[0];
+  const overallRisk = predictions.reduce<PredictionRiskLevel>(
+    (highest, prediction) =>
+      riskRank[prediction.baseline.riskLevel] > riskRank[highest]
+        ? prediction.baseline.riskLevel
+        : highest,
+    "Low"
+  );
+  const baselineSignature = JSON.stringify(baselines);
+  const contextSignature = predictions
+    .map(
+      ({ zone, cycle: zoneCycle }) =>
+        `${zone}:${zoneCycle.id}:${zoneCycle.startDate}`
+    )
+    .join("|");
+  const latestReading = baselines.reduce(
+    (latest, baseline) =>
+      baseline.latestReading > latest ? baseline.latestReading : latest,
+    "-"
+  );
+  const hasReadyZoneData =
+    inputs.length > 0 &&
+    inputs.every(
+      (input) => input.sensorData.length > 0
+    ) &&
+    baselines.every((baseline) => baseline.latestReading !== "-");
+  const fallbackAdvice = combineZoneAdvice(
+    predictions.map(({ zone, baseline, fallbackAdvice }) => ({
+      zone,
+      riskLevel: baseline.riskLevel,
+      baseline,
+      fallbackAdvice,
+    })),
+    overallRisk
+  );
+  const [aiResults, setAiResults] = useState<Record<string, {
+    contextSignature: string;
+    baselineSignature: string;
+    latestReading: string;
     advice: CyclePredictionAdvice;
-  } | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [aiUnavailable, setAiUnavailable] = useState(false);
-  const [requestedSignature, setRequestedSignature] = useState<string | null>(
+  }>>({});
+  const [generatingContext, setGeneratingContext] = useState<string | null>(
     null
   );
+  const [unavailableContexts, setUnavailableContexts] = useState<
+    Record<string, boolean>
+  >({});
+  const [requestedContexts, setRequestedContexts] = useState<
+    Record<string, boolean>
+  >({});
+  const autoRequestedContextsRef = useRef(new Set<string>());
 
-  const hasCurrentAiResult = aiResult?.signature === baselineSignature;
-  const hasRequestedAi = requestedSignature === baselineSignature;
+  const aiResult = aiResults[contextSignature];
+  const isGenerating = generatingContext === contextSignature;
+  const aiUnavailable = Boolean(unavailableContexts[contextSignature]);
+  const hasCurrentAiResult = Boolean(aiResult);
+  const hasRequestedAi = Boolean(requestedContexts[contextSignature]);
+  const hasNewSensorData = Boolean(
+    hasCurrentAiResult && aiResult?.baselineSignature !== baselineSignature
+  );
   const showRecommendations =
     hasCurrentAiResult || (hasRequestedAi && aiUnavailable);
   const advice = hasCurrentAiResult
-    ? aiResult.advice
-    : prediction.fallbackAdvice;
-  const { baseline } = prediction;
+    ? aiResult!.advice
+    : fallbackAdvice;
+  const recommendationsDataThrough = hasCurrentAiResult
+    ? aiResult!.latestReading
+    : latestReading;
 
-  const generateAiRecommendations = async () => {
-    setRequestedSignature(baselineSignature);
-    setIsGenerating(true);
-    setAiUnavailable(false);
+  const generateAiRecommendations = useCallback(async () => {
+    setRequestedContexts((current) => ({
+      ...current,
+      [contextSignature]: true,
+    }));
+    setGeneratingContext(contextSignature);
+    setUnavailableContexts((current) => ({
+      ...current,
+      [contextSignature]: false,
+    }));
 
     try {
       const response = await fetch("/api/cycle-prediction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseline }),
+        body: JSON.stringify(
+          isMultiZone ? { baselines } : { baseline: baselines[0] }
+        ),
       });
       const json = await response.json();
 
@@ -75,20 +215,56 @@ export default function CurrentCyclePrediction({
         throw new Error("AI prediction enhancement is unavailable");
       }
 
-      setAiResult({ signature: baselineSignature, advice: json.advice });
+      setAiResults((current) => ({
+        ...current,
+        [contextSignature]: {
+          contextSignature,
+          baselineSignature,
+          latestReading,
+          advice: json.advice,
+        },
+      }));
     } catch {
-      setAiUnavailable(true);
+      setUnavailableContexts((current) => ({
+        ...current,
+        [contextSignature]: true,
+      }));
     } finally {
-      setIsGenerating(false);
+      setGeneratingContext((current) =>
+        current === contextSignature ? null : current
+      );
     }
-  };
+  }, [baselineSignature, baselines, contextSignature, isMultiZone, latestReading]);
 
-  const timingValue =
-    baseline.daysRemaining > 0
-      ? `${baseline.daysRemaining} days remaining`
-      : baseline.currentDay === baseline.targetHarvestDay
-        ? `Day ${baseline.targetHarvestDay} reached`
-        : `${baseline.currentDay - baseline.targetHarvestDay} days beyond ideal`;
+  useEffect(() => {
+    if (
+      !isMultiZone ||
+      !hasReadyZoneData ||
+      hasRequestedAi ||
+      isGenerating ||
+      autoRequestedContextsRef.current.has(contextSignature)
+    ) {
+      return;
+    }
+
+    autoRequestedContextsRef.current.add(contextSignature);
+    void generateAiRecommendations();
+  }, [
+    contextSignature,
+    generateAiRecommendations,
+    hasRequestedAi,
+    hasReadyZoneData,
+    isGenerating,
+    isMultiZone,
+  ]);
+
+  if (!primaryPrediction) return null;
+  const { baseline } = primaryPrediction;
+  const timingValue = formatHarvestTiming(
+    baseline.currentDay,
+    baseline.targetHarvestDay,
+    baseline.daysRemaining
+  );
 
   return (
     <section className="overflow-hidden rounded-2xl border border-indigo-100 bg-white shadow">
@@ -97,28 +273,37 @@ export default function CurrentCyclePrediction({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-2xl font-semibold text-slate-950">
-                Current Cycle Prediction
+                {isMultiZone
+                  ? "Current Cycle AI Zone Summary"
+                  : "Current Cycle Prediction"}
               </h2>
               <span
-                className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[baseline.riskLevel]}`}
+                className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[overallRisk]}`}
               >
-                {baseline.riskLevel} operational risk
+                {isMultiZone ? "Highest: " : ""}{overallRisk} operational risk
               </span>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              Forecast of the configured harvest outcome if the current
-              production and environmental trend continues.
+              {isMultiZone
+                ? "Automatic current-condition summary for every active zone. Forecasting is available after selecting one zone."
+                : "Forecast of the configured harvest outcome if the current production and environmental trend continues."}
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               <span className="rounded-full border border-indigo-100 bg-white px-2.5 py-1 text-indigo-700">
-                {baseline.houseName} · Zone {baseline.zone}
+                {baseline.houseName} · {isMultiZone
+                  ? `All Zones (${predictions.map(({ zone }) => zone).join(", ")})`
+                  : `Zone ${baseline.zone}`}
               </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
-                Cycle {baseline.cycleId}
-              </span>
-              <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
-                Day {baseline.currentDay} of ideal {baseline.targetHarvestDay}
-              </span>
+              {predictions.map(({ zone, baseline: zoneBaseline }) => (
+                <span
+                  key={zone}
+                  className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600"
+                >
+                  {isMultiZone ? `Zone ${zone} · ` : ""}
+                  {zoneBaseline.cycleId} · Day {zoneBaseline.currentDay}/
+                  {zoneBaseline.targetHarvestDay}
+                </span>
+              ))}
             </div>
           </div>
 
@@ -126,21 +311,37 @@ export default function CurrentCyclePrediction({
             <button
               type="button"
               onClick={generateAiRecommendations}
-              disabled={isGenerating}
+              disabled={isGenerating || (isMultiZone && !hasReadyZoneData)}
               className="rounded-lg bg-indigo-600 px-4 py-2 font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-indigo-300"
             >
               {isGenerating
-                ? "Analysing Current Cycle…"
-                : hasCurrentAiResult
+                ? isMultiZone
+                  ? "Summarising All Zones…"
+                  : "Analysing Current Cycle…"
+                : isMultiZone
+                  ? "Regenerate AI Summary"
+                  : hasCurrentAiResult
                   ? "Refresh AI Recommendations"
                   : "Generate AI Recommendations"}
             </button>
             <span className="text-right text-xs text-slate-500">
               {hasCurrentAiResult
-                ? "AI-assisted recommendations · fixed numeric forecast"
+                ? hasNewSensorData
+                  ? isMultiZone
+                    ? "New sensor data available · summary preserved"
+                    : "New sensor data available · result preserved"
+                  : isMultiZone
+                    ? "AI current-condition summary · fixed snapshot"
+                    : "AI-assisted recommendations · fixed numeric forecast"
                 : hasRequestedAi && aiUnavailable
-                  ? "Verified rule-based recommendations"
-                  : "Forecast ready · AI runs only on request"}
+                  ? isMultiZone
+                    ? "Verified rule-based zone summary"
+                    : "Verified rule-based recommendations"
+                  : isMultiZone
+                    ? hasReadyZoneData
+                      ? "AI summary starts automatically"
+                      : "Waiting for complete zone data"
+                    : "Forecast ready · AI runs only on request"}
             </span>
           </div>
         </div>
@@ -152,13 +353,93 @@ export default function CurrentCyclePrediction({
             className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
             role="status"
           >
-            AI enhancement is temporarily unavailable. The verified cycle
-            forecast and recommendations remain active.
+            AI enhancement is temporarily unavailable. The verified {isMultiZone
+              ? "current-condition zone summary"
+              : "cycle forecast and recommendations"} remains active.
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          {[
+        {hasNewSensorData && (
+          <div
+            className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800"
+            role="status"
+          >
+            New sensor readings have arrived. The generated AI {isMultiZone
+              ? "zone summary"
+              : "recommendations"} remains visible and reflects records through {recommendationsDataThrough}.
+            {isMultiZone ? " Regenerate" : " Refresh"} when you want the latest readings included.
+          </div>
+        )}
+
+        {isMultiZone ? (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+            {predictions.map(({ zone, baseline: zoneBaseline }) => (
+              <article
+                key={zone}
+                className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                style={{ borderTopColor: zoneAccent[zone], borderTopWidth: 4 }}
+              >
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: zoneAccent[zone] }}
+                    />
+                    <h3 className="font-semibold text-slate-950">Zone {zone}</h3>
+                  </div>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${riskStyle[zoneBaseline.riskLevel]}`}
+                  >
+                    {zoneBaseline.riskLevel} risk
+                  </span>
+                </div>
+                <div className="mb-3 text-xs text-slate-500">
+                  {zoneBaseline.cycleId} · Day {zoneBaseline.currentDay} of {zoneBaseline.targetHarvestDay}
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                  {[
+                    [
+                      "Mortality",
+                      `${zoneBaseline.mortalityRate.toFixed(2)}%`,
+                    ],
+                    [
+                      "FCR",
+                      zoneBaseline.fcr.toFixed(2),
+                    ],
+                    [
+                      "Avg temperature",
+                      `${zoneBaseline.sensor.temperatureAverage.toFixed(2)} °C`,
+                    ],
+                    [
+                      "Peak CO₂",
+                      `${zoneBaseline.sensor.co2Peak.toFixed(0)} ppm`,
+                    ],
+                    [
+                      "Peak NH₃",
+                      `${zoneBaseline.sensor.nh3Peak.toFixed(2)} ppm`,
+                    ],
+                    [
+                      "Peak PM2.5",
+                      `${zoneBaseline.sensor.pm25Peak.toFixed(2)} µg/m³`,
+                    ],
+                  ].map(([label, value]) => (
+                    <div key={label}>
+                      <div className="text-xs text-slate-500">{label}</div>
+                      <div className="mt-0.5 font-semibold text-slate-900">
+                        {value}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 border-t border-slate-200 pt-2 text-xs text-slate-500">
+                  {zoneBaseline.sensorCompleteness.toFixed(1)}% sensor completeness
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            {[
             [
               "Projected avg weight",
               `${baseline.projectedAverageWeightKg.toFixed(3)} kg`,
@@ -189,25 +470,119 @@ export default function CurrentCyclePrediction({
               `FCR ${baseline.fcr.toFixed(2)}`,
               `${baseline.weightVariancePercent >= 0 ? "+" : ""}${baseline.weightVariancePercent.toFixed(2)}% vs weight standard`,
             ],
-          ].map(([label, value, detail]) => (
-            <div
-              key={label}
-              className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-            >
-              <div className="text-xs text-slate-500">{label}</div>
-              <div className="mt-1 font-semibold text-slate-950">{value}</div>
-              <div className="mt-1 text-[11px] leading-4 text-slate-500">
-                {detail}
+            ].map(([label, value, detail]) => (
+              <div
+                key={label}
+                className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+              >
+                <div className="text-xs text-slate-500">{label}</div>
+                <div className="mt-1 font-semibold text-slate-950">{value}</div>
+                <div className="mt-1 text-[11px] leading-4 text-slate-500">
+                  {detail}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
 
         {isGenerating ? (
           <div className="rounded-xl border border-indigo-100 bg-indigo-50 p-5 text-sm text-indigo-700">
-            Reviewing current sensor, production, and harvest forecast data…
+            {isMultiZone
+              ? "Summarising the latest production and environmental condition for Zones A, B, and C…"
+              : "Reviewing current sensor, production, and harvest forecast data…"}
           </div>
         ) : showRecommendations ? (
+          isMultiZone ? (
+            <div className="space-y-5">
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4">
+                <h3 className="font-semibold text-slate-950">
+                  Overall Current Condition
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-slate-700">
+                  {advice.summary}
+                </p>
+              </div>
+
+              <div>
+                <h3 className="mb-3 font-semibold text-slate-950">
+                  AI Summary by Zone
+                </h3>
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                  {(advice.zoneSummaries ?? []).map((item) => (
+                    <article
+                      key={item.zone}
+                      className="rounded-xl border border-slate-200 bg-white p-4"
+                      style={{
+                        borderTopColor: zoneAccent[item.zone],
+                        borderTopWidth: 4,
+                      }}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="font-semibold text-slate-950">
+                          Zone {item.zone}
+                        </h4>
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${riskStyle[item.riskLevel]}`}
+                        >
+                          {item.riskLevel} condition risk
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-slate-600">
+                        {item.summary}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+                <div>
+                  <h3 className="mb-2 font-semibold text-slate-950">
+                    Conditions Requiring Attention
+                  </h3>
+                  <div className="space-y-2">
+                    {advice.keyRisks.map((risk, index) => (
+                      <div
+                        key={`${risk.title}-${index}`}
+                        className="rounded-xl border border-slate-200 bg-white p-4"
+                      >
+                        <div className="font-medium text-slate-900">
+                          {risk.title}
+                        </div>
+                        <div className="mt-1 text-sm text-slate-600">
+                          {risk.evidence}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 className="mb-2 font-semibold text-slate-950">
+                    Cross-zone Next Steps
+                  </h3>
+                  <div className="space-y-2">
+                    {advice.priorityActions.map((item, index) => (
+                      <div
+                        key={`${item.action}-${index}`}
+                        className="rounded-xl border border-slate-200 bg-white p-4"
+                      >
+                        <div className="text-xs font-semibold uppercase tracking-wide text-indigo-600">
+                          {item.timeframe}
+                        </div>
+                        <div className="mt-1 font-medium text-slate-900">
+                          {item.action}
+                        </div>
+                        <div className="mt-1 text-sm text-slate-600">
+                          {item.reason}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             <div className="space-y-4">
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -273,15 +648,16 @@ export default function CurrentCyclePrediction({
               </div>
             </div>
           </div>
+          )
         ) : (
           <div className="rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 px-5 py-6 text-center">
             <h3 className="font-semibold text-slate-900">
               AI recommendations have not been generated
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              The numeric forecast above is calculated locally from the current
-              cycle. Click Generate AI Recommendations when you want additional
-              interpretation, risks, and priority farmer actions.
+              {isMultiZone
+                ? "The AI current-condition summary starts automatically when All Zones is opened."
+                : "The numeric forecast above is calculated locally from the current cycle. Click Generate AI Recommendations when you want additional interpretation, risks, and priority farmer actions."}
             </p>
           </div>
         )}
@@ -302,7 +678,7 @@ export default function CurrentCyclePrediction({
               ))}
             </div>
             <p className="mt-3 text-xs leading-5 text-slate-500">
-              Based on records through {baseline.latestReading}. This is
+              Based on records through {recommendationsDataThrough}. This is
               decision support, not a disease diagnosis or medication
               recommendation. Confirm actions through flock inspection, farm
               records, and qualified farm or veterinary personnel where needed.
@@ -312,7 +688,9 @@ export default function CurrentCyclePrediction({
 
         {!showRecommendations && (
           <p className="mt-3 text-xs leading-5 text-slate-500">
-            Numeric forecast based on records through {baseline.latestReading}.
+            {isMultiZone
+              ? `Current-condition data available through ${latestReading}.`
+              : `Numeric forecast based on records through ${latestReading}.`}
             Confirm the result through flock inspection and verified farm
             records before making harvest decisions.
           </p>

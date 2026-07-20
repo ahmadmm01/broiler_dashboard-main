@@ -1,7 +1,10 @@
 import type { HarvestSummary } from "./cycleAnalytics";
 import { dateToDayNumber } from "./dateUtils";
 import { summarizeData } from "./sensorData";
-import type { HistoricalCycle } from "./historicalCycles";
+import type {
+  HistoricalCycle,
+  HistoricalProductionData,
+} from "./historicalCycles";
 import type {
   AlertEvent,
   ConsumptionEntry,
@@ -33,7 +36,8 @@ function auditId(type: string, timestamp: string) {
 }
 
 export function normalizeProductionCycle(
-  value: ProductionCycle
+  value: ProductionCycle,
+  fallbackZone: Zone = value.zone ?? "A"
 ): ProductionCycle {
   const fallbackTimestamp = `${value.startDate}T00:00:00.000Z`;
   const createdAt = value.createdAt || fallbackTimestamp;
@@ -46,6 +50,7 @@ export function normalizeProductionCycle(
 
   return {
     ...value,
+    zone: value.zone ?? fallbackZone,
     id: normalizedId,
     status: value.status ?? "active",
     createdAt,
@@ -67,10 +72,12 @@ export function normalizeProductionCycle(
 
 export function startProductionCycle(
   input: StartCycleInput,
+  zone: Zone,
   timestamp = new Date().toISOString()
 ): ProductionCycle {
   return {
     id: input.id.trim(),
+    zone,
     houseName: input.houseName.trim(),
     startDate: input.startDate,
     targetHarvestDay: Math.max(1, input.targetHarvestDay),
@@ -203,26 +210,71 @@ export function buildHistoricalCycleSnapshot({
       ? dateToDayNumber(cycle.actualHarvestDate, cycle.startDate)
       : summary.cycleDay
   );
-  const mortalityByDate = new Map<string, number>();
+  const buildZoneProduction = (): HistoricalProductionData => {
+    const mortalityByDate = new Map<string, number>();
 
-  mortality
-    .filter(
-      (entry) =>
-        entry.zone === zone &&
-        entry.date >= cycle.startDate &&
-        entry.date <= endDate
-    )
-    .forEach((entry) => {
-      mortalityByDate.set(
-        entry.date,
-        (mortalityByDate.get(entry.date) ?? 0) + entry.count
-      );
-    });
+    mortality
+      .filter(
+        (entry) =>
+          entry.cycleId === cycle.id &&
+          entry.zone === zone &&
+          entry.date >= cycle.startDate &&
+          entry.date <= endDate
+      )
+      .forEach((entry) => {
+        mortalityByDate.set(
+          entry.date,
+          (mortalityByDate.get(entry.date) ?? 0) + entry.count
+        );
+      });
+
+    return {
+      initialBirds: cycle.initialBirds,
+      harvestedBirds: cycle.harvestedBirds || summary.survivingBirds,
+      mortality: Array.from(mortalityByDate.entries())
+        .map(([date, count]) => ({
+          day: dateToDayNumber(date, cycle.startDate),
+          date,
+          count,
+        }))
+        .sort((a, b) => a.day - b.day),
+      feedWater: consumptions
+        .filter(
+          (entry) =>
+            entry.cycleId === cycle.id &&
+            entry.zone === zone &&
+            entry.date >= cycle.startDate &&
+            entry.date <= endDate
+        )
+        .map((entry) => ({
+          day: dateToDayNumber(entry.date, cycle.startDate),
+          date: entry.date,
+          feedKgPerBird: entry.feedKg,
+          waterLPerBird: entry.waterL,
+        }))
+        .sort((a, b) => a.day - b.day),
+      weights: weights
+        .filter(
+          (entry) =>
+            entry.cycleId === cycle.id &&
+            entry.zone === zone &&
+            entry.day <= harvestDay
+        )
+        .map((entry) => ({
+          day: entry.day,
+          actualWeightKg: entry.actualWeightKg,
+          standardWeightKg: entry.stdWeightKg,
+        }))
+        .sort((a, b) => a.day - b.day),
+    };
+  };
+  const production = buildZoneProduction();
 
   return {
-    key: `managed:${cycle.id}`,
+    key: `managed:${zone}:${cycle.id}`,
     id: cycle.id,
-    label: "Managed cycle",
+    zone,
+    label: `Zone ${zone} · Managed cycle`,
     status: "Completed",
     harvestDay,
     startDate: cycle.startDate,
@@ -238,39 +290,8 @@ export function buildHistoricalCycleSnapshot({
       nh3: sensor?.nh3.avg ?? 0,
       pm25: sensor?.pm25.avg ?? 0,
     },
-    production: {
-      initialBirds: cycle.initialBirds,
-      harvestedBirds: cycle.harvestedBirds || summary.survivingBirds,
-      mortality: Array.from(mortalityByDate.entries())
-        .map(([date, count]) => ({
-          day: dateToDayNumber(date, cycle.startDate),
-          date,
-          count,
-        }))
-        .sort((a, b) => a.day - b.day),
-      feedWater: consumptions
-        .filter(
-          (entry) =>
-            entry.zone === zone &&
-            entry.date >= cycle.startDate &&
-            entry.date <= endDate
-        )
-        .map((entry) => ({
-          day: dateToDayNumber(entry.date, cycle.startDate),
-          date: entry.date,
-          feedKgPerBird: entry.feedKg,
-          waterLPerBird: entry.waterL,
-        }))
-        .sort((a, b) => a.day - b.day),
-      weights: weights
-        .filter((entry) => entry.zone === zone && entry.day <= harvestDay)
-        .map((entry) => ({
-          day: entry.day,
-          actualWeightKg: entry.actualWeightKg,
-          standardWeightKg: entry.stdWeightKg,
-        }))
-        .sort((a, b) => a.day - b.day),
-    },
+    production,
+    productionZone: zone,
     data: sensorData.map((point) => ({ ...point })),
   };
 }
