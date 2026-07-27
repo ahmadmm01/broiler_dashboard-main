@@ -12,7 +12,11 @@ export async function GET() {
   const zones = Object.fromEntries(
     CAMERA_ZONES.map((zone) => [
       zone,
-      { configured: Boolean(config.sources[zone]) },
+      {
+        configured:
+          zone === "A" &&
+          (config.mode === "dummy" || Boolean(config.sources[zone])),
+      },
     ])
   ) as Record<Zone, { configured: boolean }>;
 

@@ -20,6 +20,7 @@ export default function ProductionCyclePanel({
   summary,
   onChange,
   onStart,
+  onReset,
   onComplete,
   onReopen,
   onDownload,
@@ -29,6 +30,7 @@ export default function ProductionCyclePanel({
   summary: HarvestSummary;
   onChange: (cycle: ProductionCycle) => void;
   onStart: (input: StartCycleInput) => void;
+  onReset: () => void;
   onComplete: (input: CompleteCycleInput) => void;
   onReopen: (reason: string) => void;
   onDownload: () => void;
@@ -55,6 +57,8 @@ export default function ProductionCyclePanel({
       notes: "",
     }));
   const [reopenReason, setReopenReason] = useState("");
+  const isDraft = cycle.status === "draft";
+  const isActive = cycle.status === "active";
   const isCompleted = cycle.status === "completed";
   const harvestReady = summary.cycleDay >= cycle.targetHarvestDay;
   const cycleProgressPercent = Math.min(
@@ -158,12 +162,16 @@ export default function ProductionCyclePanel({
             </h2>
             <span
               className={`rounded-full border px-2.5 py-1 text-xs ${
-                isCompleted
+                isDraft
+                  ? "border-slate-200 bg-slate-100 text-slate-700"
+                  : isCompleted
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                   : "border-blue-200 bg-blue-50 text-blue-700"
               }`}
             >
-              {isCompleted
+              {isDraft
+                ? "Not started"
+                : isCompleted
                 ? "Completed · Historical snapshot created"
                 : harvestReady
                   ? `Active · Day ${summary.cycleDay} · Ready for review`
@@ -176,7 +184,16 @@ export default function ProductionCyclePanel({
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          {!isCompleted &&
+          {isDraft && !isStarting && (
+            <button
+              type="button"
+              onClick={openStartCycle}
+              className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700"
+            >
+              + Start Cycle
+            </button>
+          )}
+          {isActive &&
             !isEditing &&
             !isStarting &&
             !isCompleting && (
@@ -188,7 +205,16 @@ export default function ProductionCyclePanel({
               ✏️ Edit Cycle Data
             </button>
           )}
-          {!isCompleted && !isCompleting && !isStarting && (
+          {isActive && !isCompleting && !isStarting && (
+            <button
+              type="button"
+              onClick={onReset}
+              className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 font-semibold text-red-700 transition hover:bg-red-100"
+            >
+              ↺ Reset Cycle
+            </button>
+          )}
+          {isActive && !isCompleting && !isStarting && (
             <button
               type="button"
               onClick={openCompletion}
@@ -220,25 +246,27 @@ export default function ProductionCyclePanel({
               </button>
             </>
           )}
-          <button
-            type="button"
-            onClick={onDownload}
-            disabled={isDownloading}
-            className="flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700 disabled:bg-gray-400"
-          >
-            {isDownloading ? "Generating report…" : "📄 Download Cycle Report"}
-          </button>
+          {!isDraft && (
+            <button
+              type="button"
+              onClick={onDownload}
+              disabled={isDownloading}
+              className="flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700 disabled:bg-gray-400"
+            >
+              {isDownloading ? "Generating report…" : "📄 Download Cycle Report"}
+            </button>
+          )}
         </div>
       </div>
 
       <div className="mb-5 grid grid-cols-1 gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         {[
-          ["Cycle ID", cycle.id],
+          ["Cycle ID", isDraft ? "Not assigned" : cycle.id],
           ["House / zone", `${cycle.houseName} · Zone ${cycle.zone}`],
-          ["Start date", cycle.startDate],
+          ["Start date", isDraft ? "Not started" : cycle.startDate],
           ["Ideal cycle length", `${cycle.targetHarvestDay} days`],
           ["Lifecycle status", cycle.status.toUpperCase()],
-          ["Revision", `#${cycle.revision}`],
+          ["Revision", isDraft ? "—" : `#${cycle.revision}`],
         ].map(([label, value]) => (
           <div key={label}>
             <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -249,40 +277,56 @@ export default function ProductionCyclePanel({
         ))}
       </div>
 
-      <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">
-              Current cycle progress
-            </div>
-            <div className="mt-1 text-xl font-semibold text-slate-950">
-              Day {summary.cycleDay} of the ideal {cycle.targetHarvestDay}-day
-              cycle
-            </div>
-            <p className="mt-1 text-sm text-slate-600">
-              {cycleProgressMessage}
-            </p>
+      {isDraft ? (
+        <div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Cycle status
           </div>
-          <div className="text-sm font-semibold text-blue-700">
-            {Math.round(cycleProgressPercent)}%
+          <div className="mt-1 text-xl font-semibold text-slate-950">
+            No production cycle has started
           </div>
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">
+            Environmental sensors remain available for Zone {cycle.zone}. Start
+            a cycle after flock placement, start date, and initial bird count
+            have been confirmed.
+          </p>
         </div>
-        <div
-          className="mt-3 h-2.5 overflow-hidden rounded-full bg-blue-100"
-          role="progressbar"
-          aria-label="Current cycle progress"
-          aria-valuemin={0}
-          aria-valuemax={cycle.targetHarvestDay}
-          aria-valuenow={Math.min(summary.cycleDay, cycle.targetHarvestDay)}
-        >
+      ) : (
+        <div className="mb-5 rounded-2xl border border-blue-100 bg-blue-50/70 p-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">
+                Current cycle progress
+              </div>
+              <div className="mt-1 text-xl font-semibold text-slate-950">
+                Day {summary.cycleDay} of the ideal {cycle.targetHarvestDay}-day
+                cycle
+              </div>
+              <p className="mt-1 text-sm text-slate-600">
+                {cycleProgressMessage}
+              </p>
+            </div>
+            <div className="text-sm font-semibold text-blue-700">
+              {Math.round(cycleProgressPercent)}%
+            </div>
+          </div>
           <div
-            className={`h-full rounded-full transition-all ${
-              harvestReady ? "bg-emerald-500" : "bg-blue-600"
-            }`}
-            style={{ width: `${cycleProgressPercent}%` }}
-          />
+            className="mt-3 h-2.5 overflow-hidden rounded-full bg-blue-100"
+            role="progressbar"
+            aria-label="Current cycle progress"
+            aria-valuemin={0}
+            aria-valuemax={cycle.targetHarvestDay}
+            aria-valuenow={Math.min(summary.cycleDay, cycle.targetHarvestDay)}
+          >
+            <div
+              className={`h-full rounded-full transition-all ${
+                harvestReady ? "bg-emerald-500" : "bg-blue-600"
+              }`}
+              style={{ width: `${cycleProgressPercent}%` }}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {isStarting && (
         <form
@@ -698,6 +742,8 @@ export default function ProductionCyclePanel({
         </form>
       )}
 
+      {!isDraft && (
+        <>
       <details className="mb-5 rounded-xl border border-slate-200 bg-slate-50 p-3">
         <summary className="cursor-pointer text-sm font-semibold text-slate-700">
           Audit trail · {cycle.auditLog.length} lifecycle event
@@ -784,6 +830,8 @@ export default function ProductionCyclePanel({
         breed, target, and water ratio with the supervisor before audit
         sign-off.
       </p>
+        </>
+      )}
     </section>
   );
 }

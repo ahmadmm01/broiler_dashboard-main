@@ -2,11 +2,6 @@
 "use client";
 import { standardBroilerWeight } from "./lib/broilerStandard";
 import {
-  createDemoConsumptionEntries,
-  createDemoMortalityEntries,
-  createDemoWeightEntries,
-} from "./lib/demoData";
-import {
   addDays,
   dateToDayNumber,
   formatDate,
@@ -56,7 +51,7 @@ import { getSensorAlertConditions } from "./lib/alertRules";
 import {
   buildDeterministicCycleSummary,
   calculateHarvestSummary,
-  createDemoProductionCycles,
+  createDraftProductionCycles,
   type HarvestSummary,
 } from "./lib/cycleAnalytics";
 import {
@@ -142,8 +137,8 @@ function readingClass(label: string, value: number, limit: number) {
 }
 
 const aggregationDescriptions: Record<AggregationMode, string> = {
-  all: "One-minute readings are sampled to a maximum of 2,000 plotted points for responsive review.",
-  hourly: "Average of all one-minute readings within each clock hour.",
+  all: "Stored source readings are sampled to a maximum of 2,000 plotted points for responsive review.",
+  hourly: "Average of all stored readings within each clock hour.",
   daily: "Average of all readings for each calendar date.",
   weekly: "Average of available readings in each Monday–Sunday calendar week.",
   monthly: "Average of all readings for each calendar month.",
@@ -604,20 +599,20 @@ export default function DashboardPage() {
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
   const [weights, setWeights] = usePersistentState<WeightEntry[]>(
-    "broiler-dashboard:v8:weights",
-    createDemoWeightEntries
+    "broiler-dashboard:v9:audit-weights",
+    () => []
   );
   // ====== Health & Behavior (prototype) ======
   // Mortality
   const [mortality, setMortality] = usePersistentState<MortalityEntry[]>(
-    "broiler-dashboard:v8:mortality",
-    createDemoMortalityEntries
+    "broiler-dashboard:v9:audit-mortality",
+    () => []
   );
   const [storedCycles, setCycles] = usePersistentState<
     Record<Zone, ProductionCycle>
   >(
-    "broiler-dashboard:v8:zone-cycles",
-    createDemoProductionCycles
+    "broiler-dashboard:v9:audit-zone-cycles",
+    createDraftProductionCycles
   );
   const cyclesByZone = useMemo<Record<Zone, ProductionCycle>>(
     () =>
@@ -625,7 +620,7 @@ export default function DashboardPage() {
         ALL_ZONES.map((zone) => [
           zone,
           normalizeProductionCycle(
-            storedCycles[zone] ?? createDemoProductionCycles()[zone],
+            storedCycles[zone] ?? createDraftProductionCycles()[zone],
             zone
           ),
         ])
@@ -655,7 +650,7 @@ export default function DashboardPage() {
   }, [cyclesByZone, setCycles, storedCycles]);
 
   const [alerts, setAlerts] = usePersistentState<AlertEvent[]>(
-    "broiler-dashboard:v8:alerts",
+    "broiler-dashboard:v9:audit-alerts",
     () => []
   );
   const [soundEnabled, setSoundEnabled] = useState(false);
@@ -668,8 +663,8 @@ export default function DashboardPage() {
 
   // Consumption
   const [consumptions, setConsumptions] = usePersistentState<ConsumptionEntry[]>(
-    "broiler-dashboard:v8:consumptions",
-    createDemoConsumptionEntries
+    "broiler-dashboard:v9:audit-consumptions",
+    () => []
   );
 
   const cycleMortality = useMemo(
@@ -736,7 +731,7 @@ export default function DashboardPage() {
   const [isHistoricalDataOpen, setIsHistoricalDataOpen] = useState(false);
   const [managedHistoricalCycles, setManagedHistoricalCycles] =
     usePersistentState<HistoricalCycle[]>(
-      "broiler-dashboard:v8:managed-historical-cycles",
+      "broiler-dashboard:v9:audit-managed-historical-cycles",
       () => []
     );
   // ================= APPLY FILTER STATE =================
@@ -777,7 +772,7 @@ export default function DashboardPage() {
     [historicalCycles, selectedHistoricalCycleKey]
   );
   useEffect(() => {
-    if (selectedZone === "ALL") {
+    if (selectedZone === "ALL" || historicalCycles.length === 0) {
       setIsHistoricalDataOpen(false);
       setSelectedHistoricalCycleKey("");
       return;
@@ -1211,6 +1206,12 @@ export default function DashboardPage() {
     () => (selectedZone === "ALL" ? ACTIVE_ZONES : [selectedZone]),
     [selectedZone]
   );
+  const hasStartedCycle = reportZones.some(
+    (zone) => cyclesByZone[zone].status !== "draft"
+  );
+  const hasActiveCycle = reportZones.some(
+    (zone) => cyclesByZone[zone].status === "active"
+  );
   const reportDatasets = useMemo<Record<Zone, DataPoint[]>>(() => {
     return Object.fromEntries(
       ALL_ZONES.map((zone) => {
@@ -1338,12 +1339,14 @@ export default function DashboardPage() {
   const harvestSummary = harvestSummariesByZone[reportZone];
   const currentPredictionInputs = useMemo<CurrentCyclePredictionInput[]>(
     () =>
-      reportZones.map((zone) => ({
-        zone,
-        cycle: cyclesByZone[zone],
-        summary: harvestSummariesByZone[zone],
-        sensorData: reportDatasets[zone],
-      })),
+      reportZones
+        .filter((zone) => cyclesByZone[zone].status === "active")
+        .map((zone) => ({
+          zone,
+          cycle: cyclesByZone[zone],
+          summary: harvestSummariesByZone[zone],
+          sensorData: reportDatasets[zone],
+        })),
     [cyclesByZone, harvestSummariesByZone, reportDatasets, reportZones]
   );
 
@@ -1419,6 +1422,49 @@ export default function DashboardPage() {
       ),
     ]);
     setSelectedHistoricalCycleKey(snapshot.key);
+    setIsHistoricalDataOpen(true);
+  };
+
+  const handleResetCycle = () => {
+    if (selectedZone === "ALL" || cycle.status !== "active") return;
+
+    const zone = selectedZone;
+    const cycleId = cycle.id;
+    const confirmed = window.confirm(
+      `Reset ${cycleId} for Zone ${zone}?\n\nThis permanently deletes the current cycle's mortality, feed, water, body-weight, and alert records. The cycle will return to Not started and will not be added to Cycle Completed.`
+    );
+    if (!confirmed) return;
+
+    const draftCycle = createDraftProductionCycles()[zone];
+    setCycles((current) => ({ ...current, [zone]: draftCycle }));
+    setMortality((current) =>
+      current.filter(
+        (entry) => entry.zone !== zone || entry.cycleId !== cycleId
+      )
+    );
+    setConsumptions((current) =>
+      current.filter(
+        (entry) => entry.zone !== zone || entry.cycleId !== cycleId
+      )
+    );
+    setWeights((current) =>
+      current.filter(
+        (entry) => entry.zone !== zone || entry.cycleId !== cycleId
+      )
+    );
+    setAlerts((current) =>
+      current.filter(
+        (entry) => entry.zone !== zone || entry.cycleId !== cycleId
+      )
+    );
+    setLatestToast(null);
+    alertFlagsRef.current[zone] = {
+      temp: false,
+      humidity: false,
+      co2: false,
+      nh3: false,
+      pm25: false,
+    };
   };
 
   const handleReopenCycle = (reason: string) => {
@@ -1689,7 +1735,12 @@ export default function DashboardPage() {
                   key={zone}
                   className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"
                 >
-                  Zone {zone} · {zoneCycle.status === "completed" ? "Completed" : "Active"} · Day {zoneSummary.cycleDay}/{zoneCycle.targetHarvestDay}
+                  Zone {zone} ·{" "}
+                  {zoneCycle.status === "draft"
+                    ? "Not started"
+                    : zoneCycle.status === "completed"
+                      ? "Completed"
+                      : `Active · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`}
                 </span>
               );
             })}
@@ -1722,14 +1773,22 @@ export default function DashboardPage() {
         </div>
         <h2 className="mt-1 text-2xl font-semibold text-slate-950">
           {isAllZone
-            ? "Independent Active Zone Cycles"
+            ? hasActiveCycle
+              ? "Independent Zone Cycles"
+              : "Production Cycles Not Started"
+            : cycle.status === "draft"
+            ? "No Active Production Cycle"
             : cycle.status === "completed"
             ? "Completed Cycle Review"
             : "Active Production Cycle"}
         </h2>
         <p className="mt-1 max-w-3xl text-sm text-slate-600">
           {isAllZone
-            ? "Zone A, B, and C are monitored on their own cycle timelines. Their cycle day, production records, environmental data, and AI summary are kept separate below."
+            ? hasActiveCycle
+              ? "Each active zone keeps its own cycle timeline, production records, and environmental data."
+              : "No flock cycle has been started. Environmental sensors remain available in Zone A, B, and C."
+            : cycle.status === "draft"
+            ? `Zone ${cycle.zone} has no active flock cycle. Environmental monitoring remains available until placement is confirmed.`
             : cycle.status === "completed"
             ? "This cycle is locked. Its production and sensor snapshot is available in Historical Data, while lifecycle actions remain available below."
             : "Realtime CCTV, sensor readings, production records, cycle progress, system health, and on-demand AI summary for the cycle in progress."}
@@ -1747,6 +1806,7 @@ export default function DashboardPage() {
               <div className="relative h-full">
                 <CameraFeed
                   zone={selectedZone}
+                  available={selectedZone === "A"}
                   // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
                   dummySrc="/video/raw_video_dataset.mp4"
                   className="h-full w-full object-cover"
@@ -1769,6 +1829,7 @@ export default function DashboardPage() {
                   <div className="relative h-full">
                     <CameraFeed
                       zone={zone}
+                      available={zone === "A"}
                       // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
                       dummySrc="/video/raw_video_dataset.mp4"
                       className="h-full w-full object-cover"
@@ -1895,6 +1956,7 @@ export default function DashboardPage() {
           summary={harvestSummary}
           onChange={handleCycleChange}
           onStart={handleStartCycle}
+          onReset={handleResetCycle}
           onComplete={handleCompleteCycle}
           onReopen={handleReopenCycle}
           onDownload={generatePDFReport}
@@ -1902,9 +1964,9 @@ export default function DashboardPage() {
         />
       ) : (
         <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
-          Multi-zone sensor, production, and AI comparisons are shown below.
-          Select a specific zone when you need to manage the cycle or download
-          a zone-only report.
+          {hasActiveCycle
+            ? "Multi-zone sensor and production comparisons are shown below. Select a specific zone to manage its cycle."
+            : "Environmental sensors remain active across all three zones. Select a specific zone when you are ready to start its production cycle."}
         </section>
       )}
 
@@ -1944,35 +2006,41 @@ export default function DashboardPage() {
                     {historicalCycles.length} Zone {selectedZone} completed cycle
                     {historicalCycles.length === 1 ? "" : "s"} available
                   </span>
-                  <button
-                    type="button"
-                    aria-expanded={isHistoricalDataOpen}
-                    aria-controls="historical-data-content"
-                    onClick={() =>
-                      setIsHistoricalDataOpen((isOpen) => !isOpen)
-                    }
-                    className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"
-                  >
-                    {isHistoricalDataOpen
-                      ? "Hide Historical Data"
-                      : "Show Historical Data"}
-                    <svg
-                      aria-hidden="true"
-                      viewBox="0 0 20 20"
-                      fill="none"
-                      className={`h-4 w-4 transition-transform ${
-                        isHistoricalDataOpen ? "rotate-180" : ""
-                      }`}
+                  {historicalCycles.length === 0 ? (
+                    <span className="inline-flex min-w-52 items-center justify-center rounded-xl border border-slate-200 bg-slate-100 px-4 py-2.5 text-sm font-semibold text-slate-500">
+                      No completed cycle data
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-expanded={isHistoricalDataOpen}
+                      aria-controls="historical-data-content"
+                      onClick={() =>
+                        setIsHistoricalDataOpen((isOpen) => !isOpen)
+                      }
+                      className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"
                     >
-                      <path
-                        d="m5 7.5 5 5 5-5"
-                        stroke="currentColor"
-                        strokeWidth="1.8"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </svg>
-                  </button>
+                      {isHistoricalDataOpen
+                        ? "Hide Historical Data"
+                        : "Show Historical Data"}
+                      <svg
+                        aria-hidden="true"
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        className={`h-4 w-4 transition-transform ${
+                          isHistoricalDataOpen ? "rotate-180" : ""
+                        }`}
+                      >
+                        <path
+                          d="m5 7.5 5 5 5-5"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -1988,7 +2056,7 @@ export default function DashboardPage() {
             Historical Cycle Trends · Zone {selectedZone}
           </h2>
           <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            Zone {selectedZone} history · static
+            Zone {selectedZone} history · imported source
           </span>
         </div>
         <p className="mb-4 text-sm text-gray-500">
@@ -2035,14 +2103,15 @@ export default function DashboardPage() {
                 ["Readings", selectedHistoricalCycle.data.length],
                 ["Avg temp", `${selectedHistoricalCycle.averages.temp.toFixed(2)} °C`],
                 ["Avg humidity", `${selectedHistoricalCycle.averages.humidity.toFixed(2)}%`],
-                ["Avg CO₂", `${selectedHistoricalCycle.averages.co2} ppm`],
+                ["Avg CO₂", `${selectedHistoricalCycle.averages.co2.toFixed(0)} ppm`],
                 ["Avg NH₃", `${selectedHistoricalCycle.averages.nh3.toFixed(2)} ppm`],
                 ["Avg PM2.5", `${selectedHistoricalCycle.averages.pm25.toFixed(2)} µg/m³`],
                 [
-                  "Revision",
-                  selectedHistoricalCycle.revision
+                  "Source",
+                  selectedHistoricalCycle.sourceLabel ??
+                  (selectedHistoricalCycle.revision
                     ? `#${selectedHistoricalCycle.revision}`
-                    : "Seed data",
+                    : "Stored cycle"),
                 ],
               ].map(([label, value], index) => (
                 <div
@@ -2128,7 +2197,7 @@ export default function DashboardPage() {
               onChange={(e) => setAggregation(e.target.value as any)}
               className="w-full border rounded-lg px-3 py-2"
             >
-              <option value="all">Raw readings (1-minute, sampled)</option>
+              <option value="all">Raw stored readings</option>
               <option value="hourly">Hourly average</option>
               <option value="daily">Daily average (per date)</option>
               <option value="weekly">Weekly average (Mon–Sun)</option>
@@ -2716,7 +2785,8 @@ export default function DashboardPage() {
       )}
 
       {/* ============ Production Monitoring ============ */}
-      <section>
+      {hasStartedCycle ? (
+        <section>
         {!isAllZone && cycle.status === "completed" && (
           <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
             This cycle is completed and production entry is locked. Review its
@@ -2726,8 +2796,8 @@ export default function DashboardPage() {
         )}
         {isAllZone && (
           <p className="-mt-2 mb-4 text-sm text-gray-500">
-            Showing all active zones. Select a specific zone above to add or
-            update mortality, feed, water, and body weight records.
+            Showing production data for zones with a started cycle. Select a
+            specific zone to manage its daily records.
           </p>
         )}
 
@@ -2768,9 +2838,23 @@ export default function DashboardPage() {
             onSave={saveDailyProductionLog}
           />
         )}
-      </section>
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
+          <h2 className="text-xl font-semibold text-slate-900">
+            Current Production Performance
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            No production cycle has started. Mortality, feed, water, body
+            weight, FCR, and cycle prediction will appear after a flock cycle
+            is started for the selected zone.
+          </p>
+        </section>
+      )}
 
-      <CurrentCyclePrediction inputs={currentPredictionInputs} />
+      {hasActiveCycle && (
+        <CurrentCyclePrediction inputs={currentPredictionInputs} />
+      )}
 
       {/* Footer Section */}
       <footer className="order-3 mt-10 border-t py-6 text-center text-sm text-gray-600">

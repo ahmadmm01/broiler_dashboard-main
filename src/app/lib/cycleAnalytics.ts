@@ -51,6 +51,33 @@ const demoZoneStartOffsets: Record<Zone, number> = {
   C: 16,
 };
 
+export function createDraftProductionCycles(): Record<Zone, ProductionCycle> {
+  const draftDate = formatDate(new Date());
+  const draftTimestamp = `${draftDate}T00:00:00.000Z`;
+
+  return Object.fromEntries(
+    (["A", "B", "C"] as Zone[]).map((zone) => [
+      zone,
+      {
+        id: `PENDING-${zone}`,
+        zone,
+        houseName: "Poultry House 1",
+        startDate: draftDate,
+        targetHarvestDay: 37,
+        initialBirds: 25000,
+        initialAverageWeightKg: 0.044,
+        harvestedBirds: 0,
+        notes: "",
+        status: "draft",
+        createdAt: draftTimestamp,
+        updatedAt: draftTimestamp,
+        revision: 0,
+        auditLog: [],
+      } satisfies ProductionCycle,
+    ])
+  ) as unknown as Record<Zone, ProductionCycle>;
+}
+
 export function createDemoProductionCycles(): Record<Zone, ProductionCycle> {
   const windowStart = getDemoWindowStart();
 

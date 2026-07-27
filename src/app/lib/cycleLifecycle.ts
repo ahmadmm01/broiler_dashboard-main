@@ -55,18 +55,23 @@ export function normalizeProductionCycle(
     status: value.status ?? "active",
     createdAt,
     updatedAt: value.updatedAt || createdAt,
-    revision: Math.max(1, value.revision || 1),
+    revision:
+      value.status === "draft"
+        ? Math.max(0, value.revision || 0)
+        : Math.max(1, value.revision || 1),
     auditLog:
-      value.auditLog?.length > 0
-        ? value.auditLog
-        : [
-            {
-              id: `started-${createdAt}`,
-              type: "started",
-              timestamp: createdAt,
-              reason: "Legacy cycle migrated into lifecycle management.",
-            },
-          ],
+      value.status === "draft"
+        ? value.auditLog ?? []
+        : value.auditLog?.length > 0
+          ? value.auditLog
+          : [
+              {
+                id: `started-${createdAt}`,
+                type: "started",
+                timestamp: createdAt,
+                reason: "Legacy cycle migrated into lifecycle management.",
+              },
+            ],
   };
 }
 

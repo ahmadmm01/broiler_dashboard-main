@@ -48,16 +48,22 @@ function summarizeProduction(production: HistoricalProductionData) {
     (total, item) => total + item.waterLPerBird,
     0
   );
+  const hasFeedWaterData = production.feedWater.length > 0;
   const finalWeight = production.weights.at(-1);
   const finalAverageWeightKg = finalWeight?.actualWeightKg ?? 0;
-  const weightVariancePercent = finalWeight?.standardWeightKg
-    ? ((finalAverageWeightKg - finalWeight.standardWeightKg) /
-        finalWeight.standardWeightKg) *
+  const hasStandardWeight =
+    typeof finalWeight?.standardWeightKg === "number" &&
+    finalWeight.standardWeightKg > 0;
+  const weightVariancePercent = hasStandardWeight
+    ? ((finalAverageWeightKg - finalWeight.standardWeightKg!) /
+        finalWeight.standardWeightKg!) *
       100
-    : 0;
-  const estimatedFcr = finalAverageWeightKg
+    : null;
+  const estimatedFcr = hasFeedWaterData && finalAverageWeightKg
     ? totalFeed / finalAverageWeightKg
-    : 0;
+    : null;
+  const finalBiomassKg =
+    production.finalBiomassKg ?? survivingBirds * finalAverageWeightKg;
 
   return {
     totalMortality,
@@ -67,6 +73,9 @@ function summarizeProduction(production: HistoricalProductionData) {
     totalWater,
     finalWeight,
     finalAverageWeightKg,
+    finalBiomassKg,
+    hasFeedWaterData,
+    hasStandardWeight,
     weightVariancePercent,
     estimatedFcr,
   };
@@ -321,6 +330,12 @@ export default function ProductionPerformanceCharts({
     ...item,
     summary: summarizeProduction(item.production),
   }));
+  const hasAnyFeedWaterData = summaries.some(
+    (item) => item.summary.hasFeedWaterData
+  );
+  const hasAnyStandardWeight = summaries.some(
+    (item) => item.summary.hasStandardWeight
+  );
   const mortalityRecords = new Map<number, ChartRecord>();
   const feedWaterRecords = new Map<number, ChartRecord>();
   const weightRecords = new Map<number, ChartRecord>();
@@ -397,13 +412,27 @@ export default function ProductionPerformanceCharts({
                     `${integer.format(summary.totalMortality)} (${summary.mortalityRate.toFixed(2)}%)`,
                   ],
                   ["Birds remaining", integer.format(summary.survivingBirds)],
-                  ["Feed / bird", `${summary.totalFeed.toFixed(3)} kg`],
-                  ["Water / bird", `${summary.totalWater.toFixed(3)} L`],
+                  [
+                    "Feed / bird",
+                    summary.hasFeedWaterData
+                      ? `${summary.totalFeed.toFixed(3)} kg`
+                      : "Not recorded",
+                  ],
+                  [
+                    "Water / bird",
+                    summary.hasFeedWaterData
+                      ? `${summary.totalWater.toFixed(3)} L`
+                      : "Not recorded",
+                  ],
                   [
                     "Final avg weight",
                     `${summary.finalAverageWeightKg.toFixed(3)} kg`,
                   ],
-                  ["Estimated FCR", summary.estimatedFcr.toFixed(2)],
+                  ["Biomass", `${integer.format(summary.finalBiomassKg)} kg`],
+                  [
+                    "Estimated FCR",
+                    summary.estimatedFcr?.toFixed(2) ?? "Not available",
+                  ],
                 ].map(([metricLabel, value]) => (
                   <div key={metricLabel}>
                     <div className="text-xs text-slate-500">{metricLabel}</div>
@@ -417,20 +446,34 @@ export default function ProductionPerformanceCharts({
           ))}
         </div>
       ) : firstSummary ? (
-        <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-7">
           {[
             [
               "Mortality",
               `${integer.format(firstSummary.totalMortality)} (${firstSummary.mortalityRate.toFixed(2)}%)`,
             ],
             ["Birds remaining", integer.format(firstSummary.survivingBirds)],
-            ["Feed / bird", `${firstSummary.totalFeed.toFixed(3)} kg`],
-            ["Water / bird", `${firstSummary.totalWater.toFixed(3)} L`],
+            [
+              "Feed / bird",
+              firstSummary.hasFeedWaterData
+                ? `${firstSummary.totalFeed.toFixed(3)} kg`
+                : "Not recorded",
+            ],
+            [
+              "Water / bird",
+              firstSummary.hasFeedWaterData
+                ? `${firstSummary.totalWater.toFixed(3)} L`
+                : "Not recorded",
+            ],
             [
               "Final avg weight",
               `${firstSummary.finalAverageWeightKg.toFixed(3)} kg`,
             ],
-            ["Estimated FCR", firstSummary.estimatedFcr.toFixed(2)],
+            ["Biomass", `${integer.format(firstSummary.finalBiomassKg)} kg`],
+            [
+              "Estimated FCR",
+              firstSummary.estimatedFcr?.toFixed(2) ?? "Not available",
+            ],
           ].map(([label, value]) => (
             <div
               key={label}
@@ -459,66 +502,95 @@ export default function ProductionPerformanceCharts({
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
           <h3 className="font-semibold">Daily Feed & Water per Bird</h3>
           <p className="mb-3 mt-1 text-xs text-slate-500">
-            {isMultiZone
+            {!hasAnyFeedWaterData
+              ? "Feed and water were not included in the source workbook"
+              : isMultiZone
               ? "Feed and water consumption for each active zone"
               : "Daily consumption recorded for this production cycle"}
           </p>
           <div className="h-72">
-            <ResponsiveContainer
-              key={`feed-water-${seriesSignature}`}
-              width="100%"
-              height="100%"
-            >
-              <LineChart data={feedWaterData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="day" interval={5} />
-                <YAxis yAxisId="feed" />
-                <YAxis yAxisId="water" orientation="right" />
-                <Tooltip labelFormatter={(day) => `Cycle day ${day}`} />
-                <Legend />
-                {displayedSeries.map((item) => (
-                  <Line
-                    key={`feed-${item.key}`}
-                    yAxisId="feed"
-                    type="monotone"
-                    dataKey={`feed_${item.key}`}
-                    name={isMultiZone ? `${item.label} feed` : "Feed / bird (kg)"}
-                    stroke={isMultiZone ? item.color : "#2563eb"}
-                    dot={false}
-                    strokeWidth={2}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                ))}
-                {displayedSeries.map((item) => (
-                  <Line
-                    key={`water-${item.key}`}
-                    yAxisId="water"
-                    type="monotone"
-                    dataKey={`water_${item.key}`}
-                    name={isMultiZone ? `${item.label} water` : "Water / bird (L)"}
-                    stroke={isMultiZone ? item.color : "#06b6d4"}
-                    strokeDasharray={isMultiZone ? "5 4" : undefined}
-                    dot={false}
-                    strokeWidth={2}
-                    connectNulls
-                    isAnimationActive={false}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+            {hasAnyFeedWaterData ? (
+              <ResponsiveContainer
+                key={`feed-water-${seriesSignature}`}
+                width="100%"
+                height="100%"
+              >
+                <LineChart data={feedWaterData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="day" interval={5} />
+                  <YAxis yAxisId="feed" />
+                  <YAxis yAxisId="water" orientation="right" />
+                  <Tooltip labelFormatter={(day) => `Cycle day ${day}`} />
+                  <Legend />
+                  {displayedSeries.map((item) => (
+                    <Line
+                      key={`feed-${item.key}`}
+                      yAxisId="feed"
+                      type="monotone"
+                      dataKey={`feed_${item.key}`}
+                      name={
+                        isMultiZone
+                          ? `${item.label} feed`
+                          : "Feed / bird (kg)"
+                      }
+                      stroke={isMultiZone ? item.color : "#2563eb"}
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      isAnimationActive={false}
+                    />
+                  ))}
+                  {displayedSeries.map((item) => (
+                    <Line
+                      key={`water-${item.key}`}
+                      yAxisId="water"
+                      type="monotone"
+                      dataKey={`water_${item.key}`}
+                      name={
+                        isMultiZone
+                          ? `${item.label} water`
+                          : "Water / bird (L)"
+                      }
+                      stroke={isMultiZone ? item.color : "#06b6d4"}
+                      strokeDasharray={isMultiZone ? "5 4" : undefined}
+                      dot={false}
+                      strokeWidth={2}
+                      connectNulls
+                      isAnimationActive={false}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 px-6 text-center">
+                <div>
+                  <div className="font-medium text-slate-700">
+                    Data not available
+                  </div>
+                  <p className="mt-1 text-sm text-slate-500">
+                    No feed or water records were provided for this cycle.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm xl:col-span-2 2xl:col-span-1">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 className="font-semibold">Body Weight vs Standard</h3>
+              <h3 className="font-semibold">
+                {hasAnyStandardWeight ? "Body Weight vs Standard" : "Body Weight"}
+              </h3>
               <p className="mb-3 mt-1 text-xs text-slate-500">
                 {isMultiZone
-                  ? "Actual body weight by zone against one shared standard"
+                  ? hasAnyStandardWeight
+                    ? "Actual body weight by zone against one shared standard"
+                    : "Actual body weight recorded for each zone"
                   : firstSummary?.finalWeight
-                    ? `Final variance ${firstSummary.weightVariancePercent >= 0 ? "+" : ""}${firstSummary.weightVariancePercent.toFixed(2)}% against the configured standard`
+                    ? firstSummary.weightVariancePercent !== null
+                      ? `Final variance ${firstSummary.weightVariancePercent >= 0 ? "+" : ""}${firstSummary.weightVariancePercent.toFixed(2)}% against the configured standard`
+                      : "Daily average body weight recorded during this cycle; no comparison standard is configured"
                     : "Waiting for body-weight records for this cycle"}
               </p>
             </div>
@@ -527,7 +599,8 @@ export default function ProductionPerformanceCharts({
                 className={`rounded-full px-2.5 py-1 text-xs font-medium ${
                   !firstSummary.finalWeight
                     ? "bg-slate-100 text-slate-600"
-                    : firstSummary.weightVariancePercent < -3
+                    : firstSummary.weightVariancePercent !== null &&
+                        firstSummary.weightVariancePercent < -3
                       ? "bg-amber-100 text-amber-700"
                       : "bg-emerald-100 text-emerald-700"
                 }`}
@@ -555,7 +628,11 @@ export default function ProductionPerformanceCharts({
                     key={item.key}
                     type="monotone"
                     dataKey={`weight_${item.key}`}
-                    name={isMultiZone ? `${item.label} actual` : "Actual weight (kg)"}
+                    name={
+                      isMultiZone
+                        ? `${item.label} actual`
+                        : "Actual weight (kg)"
+                    }
                     stroke={isMultiZone ? item.color : "#7c3aed"}
                     dot={false}
                     strokeWidth={2.5}
@@ -563,16 +640,18 @@ export default function ProductionPerformanceCharts({
                     isAnimationActive={false}
                   />
                 ))}
-                <Line
-                  type="monotone"
-                  dataKey="standardWeightKg"
-                  name="Standard weight (kg)"
-                  stroke="#94a3b8"
-                  strokeDasharray="5 5"
-                  dot={false}
-                  connectNulls
-                  isAnimationActive={false}
-                />
+                {hasAnyStandardWeight && (
+                  <Line
+                    type="monotone"
+                    dataKey="standardWeightKg"
+                    name="Standard weight (kg)"
+                    stroke="#94a3b8"
+                    strokeDasharray="5 5"
+                    dot={false}
+                    connectNulls
+                    isAnimationActive={false}
+                  />
+                )}
               </LineChart>
             </ResponsiveContainer>
           </div>

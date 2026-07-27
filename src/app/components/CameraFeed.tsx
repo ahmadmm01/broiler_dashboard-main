@@ -8,6 +8,7 @@ type CameraFeedProps = {
   zone: Zone;
   dummySrc: string;
   className?: string;
+  available?: boolean;
 };
 
 let configRequest: Promise<VideoSourceConfigResponse> | null = null;
@@ -28,7 +29,9 @@ export default function CameraFeed({
   zone,
   dummySrc,
   className = "w-full h-full object-cover",
+  available,
 }: CameraFeedProps) {
+  const cameraAvailable = available ?? zone === "A";
   const [config, setConfig] = useState<VideoSourceConfigResponse | null>(null);
   const [configFailed, setConfigFailed] = useState(false);
   const [streamFailed, setStreamFailed] = useState(false);
@@ -36,6 +39,8 @@ export default function CameraFeed({
   const [retryNumber, setRetryNumber] = useState(0);
 
   useEffect(() => {
+    if (!cameraAvailable) return;
+
     let active = true;
     loadVideoConfig()
       .then((result) => {
@@ -47,7 +52,7 @@ export default function CameraFeed({
     return () => {
       active = false;
     };
-  }, []);
+  }, [cameraAvailable]);
 
   useEffect(() => {
     setStreamFailed(false);
@@ -55,7 +60,9 @@ export default function CameraFeed({
   }, [zone, retryNumber, config?.mode]);
 
   const rtspConfigured =
-    config?.mode === "rtsp" && config.zones[zone].configured;
+    cameraAvailable &&
+    config?.mode === "rtsp" &&
+    config.zones[zone].configured;
   const showRtsp = rtspConfigured && !streamFailed;
   const streamUrl = useMemo(() => {
     if (!config || !rtspConfigured) return null;
@@ -76,7 +83,19 @@ export default function CameraFeed({
 
   return (
     <>
-      {showRtsp && streamUrl ? (
+      {!cameraAvailable ? (
+        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 px-6 text-center text-white">
+          <div>
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white/10 text-xl">
+              📷
+            </div>
+            <div className="mt-3 text-sm font-semibold">CCTV not available</div>
+            <p className="mt-1 text-xs leading-5 text-slate-300">
+              Zone {zone} has environmental sensors, but no camera is installed.
+            </p>
+          </div>
+        </div>
+      ) : showRtsp && streamUrl ? (
         <img
           key={streamUrl}
           src={streamUrl}

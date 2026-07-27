@@ -55,7 +55,7 @@ export function getVideoSourceConfig(): ServerVideoSourceConfig {
   const sources = Object.fromEntries(
     CAMERA_ZONES.map((zone) => {
       const zoneUrl = cleanEnv(process.env[`RTSP_URL_${zone}`]);
-      const url = zoneUrl ?? sharedUrl;
+      const url = zone === "A" ? zoneUrl ?? sharedUrl : null;
       return [zone, url ? { key: sourceKey(url), url } : null];
     })
   ) as Record<Zone, RtspSource | null>;

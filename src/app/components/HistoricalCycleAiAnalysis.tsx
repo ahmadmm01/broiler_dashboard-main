@@ -2,8 +2,12 @@
 
 import { useMemo, useState } from "react";
 import {
+  createFocusedHistoricalAdvice,
   createHistoricalCycleAnalysis,
+  getHistoricalAnalysisQuestion,
+  HISTORICAL_ANALYSIS_QUESTIONS,
   type HistoricalAnalysisRisk,
+  type HistoricalAnalysisQuestionId,
   type HistoricalCycleAdvice,
 } from "../lib/historicalCycleAnalysis";
 import type { HistoricalCycle } from "../lib/historicalCycles";
@@ -24,33 +28,45 @@ export default function HistoricalCycleAiAnalysis({
     [cycle]
   );
   const signature = JSON.stringify(analysis.baseline);
-  const [aiResult, setAiResult] = useState<{
-    signature: string;
-    advice: HistoricalCycleAdvice;
-  } | null>(null);
-  const [requestedSignature, setRequestedSignature] = useState<string | null>(
-    null
-  );
+  const [selectedQuestionId, setSelectedQuestionId] =
+    useState<HistoricalAnalysisQuestionId>("overall");
+  const selectedQuestion = getHistoricalAnalysisQuestion(selectedQuestionId);
+  const requestKey = `${signature}:${selectedQuestionId}`;
+  const [analysisResults, setAnalysisResults] = useState<
+    Record<
+      string,
+      {
+        advice: HistoricalCycleAdvice;
+        source: "ai" | "fallback";
+      }
+    >
+  >({});
   const [isGenerating, setIsGenerating] = useState(false);
-  const [aiUnavailable, setAiUnavailable] = useState(false);
-  const hasCurrentAiResult = aiResult?.signature === signature;
-  const hasRequestedCurrentCycle = requestedSignature === signature;
-  const showAnalysis =
-    hasCurrentAiResult || (hasRequestedCurrentCycle && aiUnavailable);
-  const advice = hasCurrentAiResult
-    ? aiResult.advice
-    : analysis.fallbackAdvice;
+  const currentResult = analysisResults[requestKey];
+  const fallbackAdvice = useMemo(
+    () => createFocusedHistoricalAdvice(analysis, selectedQuestionId),
+    [analysis, selectedQuestionId]
+  );
+  const showAnalysis = Boolean(currentResult);
+  const advice = currentResult?.advice ?? fallbackAdvice;
 
   const generateAnalysis = async () => {
-    setRequestedSignature(signature);
+    const generatedQuestionId = selectedQuestionId;
+    const generatedRequestKey = requestKey;
+    const generatedFallback = createFocusedHistoricalAdvice(
+      analysis,
+      generatedQuestionId
+    );
     setIsGenerating(true);
-    setAiUnavailable(false);
 
     try {
       const response = await fetch("/api/historical-cycle-analysis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ baseline: analysis.baseline }),
+        body: JSON.stringify({
+          baseline: analysis.baseline,
+          questionId: generatedQuestionId,
+        }),
       });
       const json = await response.json();
 
@@ -58,9 +74,21 @@ export default function HistoricalCycleAiAnalysis({
         throw new Error("AI historical analysis is unavailable");
       }
 
-      setAiResult({ signature, advice: json.advice });
+      setAnalysisResults((current) => ({
+        ...current,
+        [generatedRequestKey]: {
+          advice: json.advice,
+          source: "ai",
+        },
+      }));
     } catch {
-      setAiUnavailable(true);
+      setAnalysisResults((current) => ({
+        ...current,
+        [generatedRequestKey]: {
+          advice: generatedFallback,
+          source: "fallback",
+        },
+      }));
     } finally {
       setIsGenerating(false);
     }
@@ -69,21 +97,53 @@ export default function HistoricalCycleAiAnalysis({
   return (
     <div className="mb-6 overflow-hidden rounded-2xl border border-violet-100 bg-white shadow-sm">
       <div className="border-b border-violet-100 bg-gradient-to-r from-violet-50 via-purple-50 to-white p-4">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-semibold text-slate-950">
+              AI Historical Cycle Analysis
+            </h3>
+            <span
+              className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[analysis.baseline.riskLevel]}`}
+            >
+              {analysis.baseline.riskLevel} retrospective risk
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-600">
+            Ask a focused question about {cycle.label} to turn its completed
+            records into lessons for the next production cycle.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4 p-4">
+        <div className="grid gap-4 rounded-xl border border-violet-200 bg-violet-50/60 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
           <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-lg font-semibold text-slate-950">
-                AI Historical Cycle Analysis
-              </h3>
-              <span
-                className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[analysis.baseline.riskLevel]}`}
-              >
-                {analysis.baseline.riskLevel} retrospective risk
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-slate-600">
-              Production and environmental lessons from {cycle.label} for
-              improving the next production cycle.
+            <label
+              htmlFor="historical-analysis-question"
+              className="text-sm font-semibold text-slate-900"
+            >
+              Choose an analysis question
+            </label>
+            <select
+              id="historical-analysis-question"
+              aria-label="Historical analysis question"
+              value={selectedQuestionId}
+              onChange={(event) =>
+                setSelectedQuestionId(
+                  event.target.value as HistoricalAnalysisQuestionId
+                )
+              }
+              disabled={isGenerating}
+              className="mt-2 w-full rounded-lg border border-violet-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-900 outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-200 disabled:cursor-not-allowed disabled:bg-slate-100"
+            >
+              {HISTORICAL_ANALYSIS_QUESTIONS.map((question) => (
+                <option key={question.id} value={question.id}>
+                  {question.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs leading-5 text-slate-600">
+              {selectedQuestion.description}
             </p>
           </div>
           <div className="flex flex-col items-stretch gap-1.5 sm:items-end">
@@ -94,30 +154,28 @@ export default function HistoricalCycleAiAnalysis({
               className="rounded-lg bg-violet-600 px-4 py-2 font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
             >
               {isGenerating
-                ? "Analysing Historical Cycle…"
-                : hasCurrentAiResult
-                  ? "Refresh Historical Analysis"
-                  : "Generate Historical Analysis"}
+                ? "Analysing Selected Question…"
+                : currentResult
+                  ? "Refresh Selected Analysis"
+                  : "Analyse Selected Question"}
             </button>
             <span className="text-right text-xs text-slate-500">
-              {hasCurrentAiResult
+              {currentResult?.source === "ai"
                 ? "AI-assisted analysis · fixed historical snapshot"
-                : hasRequestedCurrentCycle && aiUnavailable
-                  ? "Verified rule-based analysis"
+                : currentResult?.source === "fallback"
+                  ? "Evidence-checked analysis · fixed historical snapshot"
                   : "AI runs only on request"}
             </span>
           </div>
         </div>
-      </div>
 
-      <div className="space-y-4 p-4">
-        {aiUnavailable && hasRequestedCurrentCycle && (
+        {currentResult?.source === "fallback" && (
           <div
-            className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+            className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-800"
             role="status"
           >
-            AI enhancement is temporarily unavailable. Verified retrospective
-            findings from the selected snapshot are shown instead.
+            This answer passed the dashboard&apos;s evidence checks and uses
+            only the selected completed-cycle snapshot.
           </div>
         )}
 
@@ -170,9 +228,18 @@ export default function HistoricalCycleAiAnalysis({
           </div>
         ) : showAnalysis ? (
           <div className="space-y-4">
+            <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+              <div className="text-xs font-semibold uppercase tracking-wide text-violet-700">
+                Focused question
+              </div>
+              <h4 className="mt-1 font-semibold text-slate-950">
+                {selectedQuestion.label}
+              </h4>
+            </div>
+
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
               <h4 className="font-semibold text-slate-950">
-                Historical Summary
+                Focused Answer
               </h4>
               <p className="mt-2 text-sm leading-6 text-slate-700">
                 {advice.summary}
@@ -182,7 +249,7 @@ export default function HistoricalCycleAiAnalysis({
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               <div>
                 <h4 className="mb-2 font-semibold text-slate-950">
-                  Key Environmental Findings
+                  Evidence and Interpretation
                 </h4>
                 <div className="space-y-2">
                   {advice.keyFindings.map((finding, index) => (
@@ -253,20 +320,24 @@ export default function HistoricalCycleAiAnalysis({
         ) : (
           <div className="rounded-xl border border-dashed border-violet-200 bg-violet-50/50 px-5 py-6 text-center">
             <h4 className="font-semibold text-slate-900">
-              Historical AI analysis has not been generated
+              Select a question to explore this completed cycle
             </h4>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               The fixed sensor statistics above are available immediately.
-              Click Generate Historical Analysis to obtain environmental
-              findings and lessons for the next cycle.
+              Choose a question and click Analyse Selected Question for a
+              focused explanation, evidence, and next-cycle actions.
             </p>
           </div>
         )}
 
         <p className="text-xs leading-5 text-slate-500">
-          This analysis uses the stored sensor, mortality, feed, water, and
-          body-weight records for {cycle.id}. It does not infer disease or any
-          farm outcome that is not stored in the selected historical snapshot.
+          This analysis uses the stored sensor, mortality, and body-weight
+          records for {cycle.id}
+          {analysis.baseline.production.availability.feedWater
+            ? ", including the available feed and water records"
+            : "; feed, water, and FCR were not included in the source workbook"}
+          . It does not infer disease or any farm outcome that is not stored in
+          the selected historical snapshot.
         </p>
       </div>
     </div>

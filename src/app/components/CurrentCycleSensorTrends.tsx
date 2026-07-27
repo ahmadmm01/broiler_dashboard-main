@@ -229,11 +229,14 @@ export default function CurrentCycleSensorTrends({
     (total, zoneSeries) => total + zoneSeries.data.length,
     0
   );
+  const hasActiveCycle = series.some(
+    ({ cycle }) => cycle.status === "active"
+  );
   const seriesSignature = preparedSeries.map(({ zone }) => zone).join("-");
   const zoneLabel =
     series.length === 1
       ? `Zone ${series[0].zone}`
-      : `all active zones (${series.map(({ zone }) => zone).join(", ")})`;
+      : `all monitored zones (${series.map(({ zone }) => zone).join(", ")})`;
 
   return (
     <section className="overflow-hidden rounded-2xl border border-cyan-100 bg-white shadow">
@@ -241,13 +244,19 @@ export default function CurrentCycleSensorTrends({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">
-              Current cycle environment
+              {hasActiveCycle
+                ? "Current cycle environment"
+                : "Environmental monitoring"}
             </div>
             <h2 className="mt-1 text-2xl font-semibold text-slate-950">
-              Current Cycle Sensor Trends
+              {hasActiveCycle
+                ? "Current Cycle Sensor Trends"
+                : "Environmental Sensor Trends"}
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              {series.length === 1
+              {!hasActiveCycle
+                ? "Sensor monitoring remains available before a production cycle starts."
+                : series.length === 1
                 ? `One-minute environmental replay from ${series[0].cycle.startDate} onward for ${zoneLabel}.`
                 : "Each zone is filtered from its own active-cycle start date, so zones at different flock ages remain comparable without mixing their timelines."}{" "}
               Live mode follows the latest six-hour rolling window for every
@@ -264,7 +273,9 @@ export default function CurrentCycleSensorTrends({
                     key={zone}
                     className="rounded-full border border-cyan-100 bg-white px-2.5 py-1 text-cyan-800"
                   >
-                    Zone {zone} · {zoneCycle.id} · Day {cycleDay}
+                    {zoneCycle.status === "draft"
+                      ? `Zone ${zone} · No active cycle`
+                      : `Zone ${zone} · ${zoneCycle.id} · Day ${cycleDay}`}
                   </span>
                 );
               })}
@@ -317,11 +328,11 @@ export default function CurrentCycleSensorTrends({
       {totalReadings === 0 ? (
         <div className="p-8 text-center">
           <h3 className="font-semibold text-slate-800">
-            Waiting for current-cycle sensor readings
+            Waiting for sensor readings
           </h3>
           <p className="mt-2 text-sm text-slate-500">
-            Readings will appear here when their date is on or after the cycle
-            start date.
+            Environmental readings will appear when the sensor replay is
+            available.
           </p>
         </div>
       ) : (

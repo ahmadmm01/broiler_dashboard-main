@@ -17,6 +17,7 @@ export default function HistoricalProductionOverview({
 }: {
   cycle: HistoricalCycle;
 }) {
+  const hasFeedWaterData = cycle.production.feedWater.length > 0;
   const series: ProductionPerformanceSeries[] = [
     {
       key: cycle.zone,
@@ -29,7 +30,11 @@ export default function HistoricalProductionOverview({
   return (
     <ProductionPerformanceCharts
       title="Historical Production Performance"
-      description={`Completed mortality, feed, water, and body-weight records for ${cycle.label}.`}
+      description={
+        hasFeedWaterData
+          ? `Completed mortality, feed, water, body-weight, and biomass records for ${cycle.label}.`
+          : `Completed mortality, body-weight, and biomass records for ${cycle.label}. Feed and water were not included in the source workbook.`
+      }
       periodLabel={`${cycle.startDate} – ${cycle.endDate}`}
       series={series}
       className="order-2"

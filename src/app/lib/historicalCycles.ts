@@ -1,13 +1,7 @@
-import historicalSnapshot from "../data/historicalCycles.json";
-import {
-  addDays,
-  DAY_MS,
-  dayLabel,
-  formatDate,
-  formatDateTime,
-  parseDateOnly,
-} from "./dateUtils";
-import { interpolateSensorSeries, summarizeData } from "./sensorData";
+import historicalSnapshot from "../data/zoneACompletedCyclesSource.json";
+import { standardBroilerFeedKg } from "./broilerStandard";
+import { addDays, formatDate } from "./dateUtils";
+import { summarizeData } from "./sensorData";
 import type { CycleAuditEvent, DataPoint, Zone } from "./types";
 
 export type HistoricalMortalityRecord = {
@@ -26,12 +20,14 @@ export type HistoricalFeedWaterRecord = {
 export type HistoricalWeightRecord = {
   day: number;
   actualWeightKg: number;
-  standardWeightKg: number;
+  standardWeightKg?: number;
 };
 
 export type HistoricalProductionData = {
   initialBirds: number;
   harvestedBirds?: number;
+  finalBiomassKg?: number;
+  finalAdgGPerDay?: number;
   mortality: HistoricalMortalityRecord[];
   feedWater: HistoricalFeedWaterRecord[];
   weights: HistoricalWeightRecord[];
@@ -48,6 +44,8 @@ export type HistoricalCycle = {
   endDate: string;
   completedAt?: string;
   completionNotes?: string;
+  sourceLabel?: string;
+  dataIntervalMinutes?: number;
   revision?: number;
   auditLog?: CycleAuditEvent[];
   averages: {
@@ -84,185 +82,131 @@ type HistoricalFeedWaterRow = [
 type HistoricalWeightRow = [
   day: number,
   actualWeightKg: number,
-  standardWeightKg: number,
+  standardWeightKg?: number,
 ];
 
-function toDataPoint(
-  row: HistoricalDataRow,
-  zone: Zone,
-  dateOffset: number
-): DataPoint {
-  const [time, pointDayLabel, ts, temp, humidity, co2, nh3, pm25] = row;
-  const shiftedTs = ts + dateOffset * DAY_MS;
-  const shiftedDate = new Date(shiftedTs);
-  const sensorOffset = historicalZoneProfiles[zone].sensorOffset;
-
-  return {
-    time: dateOffset === 0 ? time : formatDateTime(shiftedDate),
-    dayLabel: dateOffset === 0 ? pointDayLabel : dayLabel(shiftedDate),
-    ts: shiftedTs,
-    temp: Number((temp + sensorOffset.temp).toFixed(2)),
-    humidity: Number((humidity + sensorOffset.humidity).toFixed(2)),
-    co2: Math.round(co2 + sensorOffset.co2),
-    nh3: Number((nh3 + sensorOffset.nh3).toFixed(2)),
-    pm25: Number((pm25 + sensorOffset.pm25).toFixed(2)),
-  };
-}
-
-const historicalZoneProfiles: Record<
-  Zone,
-  {
-    mortalityScale: number;
-    mortalityPulseModulo: number;
-    feedScale: number;
-    waterScale: number;
-    weightScale: number;
-    sensorOffset: {
-      temp: number;
-      humidity: number;
-      co2: number;
-      nh3: number;
-      pm25: number;
-    };
-  }
+const estimatedFeedWaterProfiles: Record<
+  string,
+  { targetFcr: number; waterFeedRatio: number }
 > = {
-  A: {
-    mortalityScale: 0.92,
-    mortalityPulseModulo: 6,
-    feedScale: 0.98,
-    waterScale: 0.99,
-    weightScale: 0.99,
-    sensorOffset: { temp: -0.35, humidity: -1.1, co2: -42, nh3: -0.2, pm25: -1.4 },
-  },
-  B: {
-    mortalityScale: 1.12,
-    mortalityPulseModulo: 4,
-    feedScale: 1.04,
-    waterScale: 1.05,
-    weightScale: 1.015,
-    sensorOffset: { temp: 0.55, humidity: 1.3, co2: 95, nh3: 0.35, pm25: 1.8 },
-  },
-  C: {
-    mortalityScale: 0.84,
-    mortalityPulseModulo: 5,
-    feedScale: 0.94,
-    waterScale: 0.95,
-    weightScale: 0.97,
-    sensorOffset: { temp: -0.1, humidity: 0.4, co2: -18, nh3: -0.08, pm25: 2.6 },
-  },
+  "excel-zone-a-cycle-1": { targetFcr: 1.7, waterFeedRatio: 2.12 },
+  "excel-zone-a-cycle-2": { targetFcr: 1.62, waterFeedRatio: 2.08 },
 };
 
-const historicalZoneDateOffsets: Record<Zone, number> = {
-  A: -18,
-  B: -9,
-  C: 0,
-};
+function createEstimatedFeedWater(
+  cycleKey: string,
+  startDate: string,
+  weights: HistoricalWeightRecord[]
+): HistoricalFeedWaterRecord[] {
+  const profile = estimatedFeedWaterProfiles[cycleKey];
+  const finalWeightKg = weights.at(-1)?.actualWeightKg;
+  if (!profile || !finalWeightKg || weights.length === 0) return [];
 
-function shiftDate(value: string, offset: number) {
-  return formatDate(addDays(parseDateOnly(value), offset));
+  const baseline = weights.map(({ day }) => standardBroilerFeedKg(day));
+  const baselineTotal = baseline.reduce((total, value) => total + value, 0);
+  const targetFeedTotal = Number(
+    (finalWeightKg * profile.targetFcr).toFixed(3)
+  );
+  const records = weights.map(({ day }, index) => {
+    const feedKgPerBird = Number(
+      ((baseline[index] / baselineTotal) * targetFeedTotal).toFixed(3)
+    );
+
+    return {
+      day,
+      date: formatDate(addDays(new Date(`${startDate}T00:00:00`), day - 1)),
+      feedKgPerBird,
+      waterLPerBird: Number(
+        (feedKgPerBird * profile.waterFeedRatio).toFixed(3)
+      ),
+    };
+  });
+  const roundedTotal = records.reduce(
+    (total, record) => total + record.feedKgPerBird,
+    0
+  );
+  const finalRecord = records.at(-1);
+  if (finalRecord) {
+    finalRecord.feedKgPerBird = Number(
+      (finalRecord.feedKgPerBird + targetFeedTotal - roundedTotal).toFixed(3)
+    );
+    finalRecord.waterLPerBird = Number(
+      (finalRecord.feedKgPerBird * profile.waterFeedRatio).toFixed(3)
+    );
+  }
+
+  return records;
 }
 
-function createHistoricalZoneProduction(
-  production: HistoricalProductionData,
-  zone: Zone,
-  dateOffset: number
-): HistoricalProductionData {
-  const profile = historicalZoneProfiles[zone];
+function toDataPoint(row: HistoricalDataRow): DataPoint {
+  const [time, pointDayLabel, ts, temp, humidity, co2, nh3, pm25] = row;
 
   return {
-    initialBirds: production.initialBirds,
-    harvestedBirds: production.harvestedBirds,
-    mortality: production.mortality.map((record) => ({
-      ...record,
-      date: shiftDate(record.date, dateOffset),
-      count:
-        record.count === 0
-          ? 0
-          : Math.max(
-              1,
-              Math.round(
-                record.count * profile.mortalityScale +
-                  (record.day % profile.mortalityPulseModulo === 0 ? 1 : 0)
-              )
-            ),
-    })),
-    feedWater: production.feedWater.map((record) => ({
-      ...record,
-      date: shiftDate(record.date, dateOffset),
-      feedKgPerBird: Number(
-        (record.feedKgPerBird * profile.feedScale).toFixed(3)
-      ),
-      waterLPerBird: Number(
-        (record.waterLPerBird * profile.waterScale).toFixed(3)
-      ),
-    })),
-    weights: production.weights.map((record) => ({
-      ...record,
-      actualWeightKg: Number(
-        (record.actualWeightKg * profile.weightScale).toFixed(3)
-      ),
-    })),
+    time,
+    dayLabel: pointDayLabel,
+    ts,
+    temp,
+    humidity,
+    co2,
+    nh3,
+    pm25,
   };
 }
 
 export function createHistoricalCycles(): HistoricalCycle[] {
-  return historicalSnapshot.cycles.flatMap((cycle) => {
+  return historicalSnapshot.cycles.map((cycle) => {
+    const weights = cycle.production.weights.map((row) => {
+      const [day, actualWeightKg, standardWeightKg] =
+        row as unknown as HistoricalWeightRow;
+      return { day, actualWeightKg, standardWeightKg };
+    });
+    const storedFeedWater = cycle.production.feedWater.map((row) => {
+      const [day, date, feedKgPerBird, waterLPerBird] =
+        row as unknown as HistoricalFeedWaterRow;
+      return { day, date, feedKgPerBird, waterLPerBird };
+    });
     const production: HistoricalProductionData = {
       initialBirds: cycle.production.initialBirds,
-      harvestedBirds: undefined,
+      harvestedBirds: cycle.production.harvestedBirds,
+      finalBiomassKg: cycle.production.finalBiomassKg,
+      finalAdgGPerDay: cycle.production.finalAdgGPerDay,
       mortality: cycle.production.mortality.map((row) => {
         const [day, date, count] = row as unknown as HistoricalMortalityRow;
         return { day, date, count };
       }),
-      feedWater: cycle.production.feedWater.map((row) => {
-        const [day, date, feedKgPerBird, waterLPerBird] =
-          row as unknown as HistoricalFeedWaterRow;
-        return { day, date, feedKgPerBird, waterLPerBird };
-      }),
-      weights: cycle.production.weights.map((row) => {
-        const [day, actualWeightKg, standardWeightKg] =
-          row as unknown as HistoricalWeightRow;
-        return { day, actualWeightKg, standardWeightKg };
-      }),
+      feedWater:
+        storedFeedWater.length > 0
+          ? storedFeedWater
+          : createEstimatedFeedWater(cycle.key, cycle.startDate, weights),
+      weights,
     };
+    const data = cycle.data.map((row) =>
+      toDataPoint(row as unknown as HistoricalDataRow)
+    );
+    const summary = summarizeData(data);
 
-    return (["A", "B", "C"] as Zone[]).map((zone) => {
-      const dateOffset = historicalZoneDateOffsets[zone];
-      const startDate = shiftDate(cycle.startDate, dateOffset);
-      const endDate = shiftDate(cycle.endDate, dateOffset);
-      const zoneProduction = createHistoricalZoneProduction(
-        production,
-        zone,
-        dateOffset
-      );
-      const data = interpolateSensorSeries(
-        cycle.data.map((row) =>
-          toDataPoint(row as unknown as HistoricalDataRow, zone, dateOffset)
-        ),
-        1
-      );
-      const summary = summarizeData(data);
-
-      return {
-        ...cycle,
-        key: `${cycle.key}:${zone}`,
-        id: `CYCLE-${zone}-${startDate.replaceAll("-", "")}`,
-        zone,
-        label: `Zone ${zone} · ${cycle.label}`,
-        status: "Completed" as const,
-        startDate,
-        endDate,
-        averages: {
-          temp: summary?.temp.avg ?? cycle.averages.temp,
-          humidity: summary?.humidity.avg ?? cycle.averages.humidity,
-          co2: summary?.co2.avg ?? cycle.averages.co2,
-          nh3: summary?.nh3.avg ?? cycle.averages.nh3,
-          pm25: summary?.pm25.avg ?? cycle.averages.pm25,
-        },
-        production: zoneProduction,
-        productionZone: zone,
-        data,
-      } satisfies HistoricalCycle;
-    });
+    return {
+      key: cycle.key,
+      id: cycle.id,
+      zone: "A",
+      label: `Zone A · ${cycle.label}`,
+      status: "Completed" as const,
+      harvestDay: cycle.harvestDay,
+      startDate: cycle.startDate,
+      endDate: cycle.endDate,
+      completedAt: cycle.completedAt,
+      sourceLabel: cycle.sourceLabel,
+      dataIntervalMinutes: cycle.dataIntervalMinutes,
+      averages: {
+        temp: summary?.temp.avg ?? cycle.averages.temp,
+        humidity: summary?.humidity.avg ?? cycle.averages.humidity,
+        co2: summary?.co2.avg ?? cycle.averages.co2,
+        nh3: summary?.nh3.avg ?? cycle.averages.nh3,
+        pm25: summary?.pm25.avg ?? cycle.averages.pm25,
+      },
+      production,
+      productionZone: "A",
+      data,
+    } satisfies HistoricalCycle;
   });
 }

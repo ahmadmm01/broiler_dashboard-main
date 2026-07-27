@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
-import type {
-  HistoricalCycleAdvice,
-  HistoricalCycleAnalysisBaseline,
+import {
+  getHistoricalAnalysisQuestion,
+  isHistoricalAnalysisQuestionId,
+  type HistoricalAnalysisQuestionId,
+  type HistoricalCycleAdvice,
+  type HistoricalCycleAnalysisBaseline,
 } from "../../lib/historicalCycleAnalysis";
 
 const cleanText = (value: unknown, maxLength = 320) =>
@@ -61,6 +64,36 @@ function sanitizeAdvice(value: unknown): HistoricalCycleAdvice | null {
   return { summary, keyFindings, nextCycleActions, monitoringFocus };
 }
 
+function containsUnsupportedClaim(advice: HistoricalCycleAdvice) {
+  const text = JSON.stringify(advice).toLowerCase();
+  const unsupportedTerms = [
+    "biosecurity",
+    "cause of",
+    "causes",
+    "causal",
+    "correlated",
+    "correlation",
+    "disease",
+    "diagnosis",
+    "hydration",
+    "medication",
+    "respiratory",
+    "health decline",
+    "stress",
+    "welfare",
+    "contributed to",
+    "linked to",
+    "played a role",
+    "resulted in",
+    "affected",
+    "impact on",
+    "correlating with",
+    "caused by",
+  ];
+
+  return unsupportedTerms.some((term) => text.includes(term));
+}
+
 function isHistoricalBaseline(
   value: unknown
 ): value is HistoricalCycleAnalysisBaseline {
@@ -73,6 +106,7 @@ function isHistoricalBaseline(
     typeof baseline.records === "number" &&
     typeof baseline.riskLevel === "string" &&
     typeof baseline.production === "object" &&
+    Array.isArray(baseline.cyclePhases) &&
     Array.isArray(baseline.metrics)
   );
 }
@@ -81,6 +115,7 @@ export async function POST(request: Request) {
   try {
     const payload = await request.json();
     const baseline = payload?.baseline;
+    const questionId: HistoricalAnalysisQuestionId = payload?.questionId;
 
     if (!isHistoricalBaseline(baseline)) {
       return NextResponse.json(
@@ -89,6 +124,14 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!isHistoricalAnalysisQuestionId(questionId)) {
+      return NextResponse.json(
+        { error: "A valid historical analysis question is required" },
+        { status: 400 }
+      );
+    }
+
+    const selectedQuestion = getHistoricalAnalysisQuestion(questionId);
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
       return NextResponse.json(
@@ -106,22 +149,22 @@ export async function POST(request: Request) {
       },
       body: JSON.stringify({
         model,
-        temperature: 0.2,
-        max_tokens: 900,
+        temperature: 0.1,
+        max_tokens: 1200,
         response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
             content:
-              "You are a poultry-house retrospective production and environmental analyst. Use only the supplied completed-cycle baseline, including sensor, mortality, feed, water, and body-weight results. Do not invent missing data, disease, or harvest facts, and do not prescribe medication. Keep all supplied numbers unchanged. Focus on combined outcome patterns, operational lessons, and practical preparation for the next cycle. Return valid JSON only.",
+              "You are a poultry-house retrospective production and environmental analyst. Answer the selected historical question directly and in depth. Use only the supplied completed-cycle baseline and respect its production availability flags. Do not invent missing feed, water, FCR, standard-weight, harvest, operational, health, physiological, disease, or biosecurity facts, and do not prescribe medication. Never claim or imply that one supplied metric caused, contributed to, was linked to, correlated with, or played a role in another outcome. Describe only phase-level alignment or co-occurrence and explicitly say that it requires timestamp review. Keep every supplied number unchanged. Never say an average exceeded a limit unless that average itself crosses the stated limit; exceedance counts describe individual readings, not the average. Every action and interpretation must be tied to a supplied finding. Explain evidence, limitations, operational lessons, and practical preparation for the next cycle. Return valid JSON only.",
           },
           {
             role: "user",
-            content: `Analyse this verified historical sensor baseline:\n${JSON.stringify(
+            content: `Selected question: ${selectedQuestion.label}\nAnalysis focus: ${selectedQuestion.guidance}\n\nAnalyse this verified completed-cycle baseline:\n${JSON.stringify(
               baseline,
               null,
               2
-            )}\n\nReturn this exact JSON structure:\n{\n  "summary": "retrospective environmental summary",\n  "keyFindings": [{"title":"...","evidence":"cite supplied data","meaning":"..."}],\n  "nextCycleActions": [{"timeframe":"Before next placement | Early next cycle | Throughout next cycle","action":"...","reason":"..."}],\n  "monitoringFocus": ["..."]\n}\nProvide 1-4 findings, 3-5 actions, and up to 5 monitoring items.`,
+            )}\n\nReturn this exact JSON structure:\n{\n  "summary": "a direct, focused answer to the selected question",\n  "keyFindings": [{"title":"...","evidence":"cite supplied data","meaning":"..."}],\n  "nextCycleActions": [{"timeframe":"Before next placement | Early next cycle | Throughout next cycle","action":"...","reason":"..."}],\n  "monitoringFocus": ["..."]\n}\nProvide 2-4 focused findings, 3-5 evidence-linked actions, and up to 5 monitoring items. State data limitations inside the relevant finding instead of filling gaps with assumptions. Use 'aligned', 'overlapped', or 'co-occurred' for phase comparisons; do not use causal or medical language.`,
           },
         ],
       }),
@@ -154,14 +197,17 @@ export async function POST(request: Request) {
     }
 
     const advice = sanitizeAdvice(parsed);
-    if (!advice) {
+    if (!advice || containsUnsupportedClaim(advice)) {
       return NextResponse.json(
-        { error: "OpenAI historical analysis was incomplete" },
+        {
+          error:
+            "OpenAI historical analysis was incomplete or contained unsupported claims",
+        },
         { status: 502 }
       );
     }
 
-    return NextResponse.json({ advice, model });
+    return NextResponse.json({ advice, model, questionId });
   } catch (error) {
     console.error("Failed to generate historical-cycle analysis", error);
     return NextResponse.json(
