@@ -1423,7 +1423,7 @@ function DashboardContent() {
                   zone={selectedZone}
                   available={selectedZone === "A"}
                   // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
-                  dummySrc="/video/raw_video_dataset.mp4"
+                  dummySrc="/video/raw_video_dataset_seg1.mp4"
                   className="h-full w-full object-cover"
                 />
                 <div className="absolute right-4 top-4 rounded-lg bg-black/50 px-3 py-1 text-sm font-medium text-white">
@@ -1446,7 +1446,7 @@ function DashboardContent() {
                       zone={zone}
                       available={zone === "A"}
                       // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
-                      dummySrc="/video/raw_video_dataset.mp4"
+                      dummySrc="/video/raw_video_dataset_seg1.mp4"
                       className="h-full w-full object-cover"
                     />
                     <div className="absolute right-4 top-4 rounded-lg bg-black/50 px-3 py-1 text-sm font-medium text-white">
