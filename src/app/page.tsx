@@ -12,7 +12,6 @@ import {
   createZoneData,
   getZonePoint,
   interpolateSensorSeries,
-  summarizeData,
 } from "./lib/sensorData";
 import {
   createHistoricalCycles,
@@ -20,7 +19,6 @@ import {
   type HistoricalProductionData,
 } from "./lib/historicalCycles";
 import type {
-  AlertEvent,
   ConsumptionEntry,
   DataPoint,
   LiveCard,
@@ -32,26 +30,27 @@ import type {
   Zone,
 } from "./lib/types";
 import { usePersistentState } from "./lib/usePersistentState";
+import { createInitialCurrentCycleRecords } from "./lib/currentCycleSeed";
 import CameraFeed from "./components/CameraFeed";
 import DailyProductionLog, {
   type DailyProductionLogInput,
 } from "./components/DailyProductionLog";
-import NotificationCenter from "./components/NotificationCenter";
 import ProductionCyclePanel from "./components/ProductionCyclePanel";
 import CurrentCyclePrediction, {
   type CurrentCyclePredictionInput,
 } from "./components/CurrentCyclePrediction";
 import CurrentCycleSensorTrends from "./components/CurrentCycleSensorTrends";
+import SensorTrendCard from "./components/SensorTrendCard";
 import HistoricalCycleAiAnalysis from "./components/HistoricalCycleAiAnalysis";
 import HistoricalProductionOverview from "./components/HistoricalProductionOverview";
 import ProductionPerformanceCharts, {
   type ProductionPerformanceSeries,
 } from "./components/ProductionPerformanceCharts";
-import { getSensorAlertConditions } from "./lib/alertRules";
+import { SENSOR_ALERT_RULES } from "./lib/alertRules";
 import {
-  buildDeterministicCycleSummary,
   calculateHarvestSummary,
   createDraftProductionCycles,
+  createInitialProductionCycles,
   type HarvestSummary,
 } from "./lib/cycleAnalytics";
 import {
@@ -64,8 +63,13 @@ import {
   type CompleteCycleInput,
   type StartCycleInput,
 } from "./lib/cycleLifecycle";
-import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import DashboardNavigationProvider, {
+  useDashboardNavigation,
+} from "./components/dashboard/DashboardNavigationProvider";
+import DashboardShell from "./components/dashboard/DashboardShell";
+import DashboardTabPanel from "./components/dashboard/DashboardTabPanel";
+import DashboardToolbar from "./components/dashboard/DashboardToolbar";
 import {
   LineChart,
   Line,
@@ -73,13 +77,25 @@ import {
   YAxis,
   Tooltip,
   ResponsiveContainer,
-  Legend,
   CartesianGrid,
+  ReferenceLine,
   ScatterChart,
   Scatter,
 } from "recharts";
-import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import {
+  assessCurrentCycleRisk,
+  type CycleRiskAssessment,
+} from "./lib/cyclePrediction";
+import { downloadCycleReportPdf } from "./lib/reportPdf";
+import {
+  buildCurrentCycleReportModel,
+  buildHistoricalCycleReportModel,
+} from "./lib/cycleReportModels";
+import type {
+  CurrentCycleReportAnalysisSnapshot,
+  HistoricalCycleReportAnalysisSnapshot,
+} from "./lib/reportAnalysis";
+import { useCycleAlerts } from "./hooks/useCycleAlerts";
 
 // ========= Helpers =========
 
@@ -91,6 +107,20 @@ const REALTIME_INTERVAL_MS =
     ? configuredReplayInterval
     : 60_000;
 const ALL_ZONES: Zone[] = ["A", "B", "C"];
+const SENSOR_METRICS: SensorMetric[] = [
+  "temp",
+  "humidity",
+  "co2",
+  "nh3",
+  "pm25",
+];
+const SENSOR_METRIC_COLORS: Record<SensorMetric, string> = {
+  temp: "#ef4444",
+  humidity: "#2563eb",
+  co2: "#7c3aed",
+  nh3: "#d97706",
+  pm25: "#475569",
+};
 const configuredZones = (process.env.NEXT_PUBLIC_ACTIVE_ZONES ?? "A,B,C")
   .split(",")
   .map((zone) => zone.trim().toUpperCase())
@@ -99,35 +129,13 @@ const ACTIVE_ZONES: Zone[] = Array.from(new Set(configuredZones));
 if (ACTIVE_ZONES.length === 0) ACTIVE_ZONES.push(...ALL_ZONES);
 const IS_SINGLE_ZONE = ACTIVE_ZONES.length === 1;
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-type SelectableZone = "ALL" | Zone;
 type AggregationMode = "all" | "hourly" | "daily" | "weekly" | "monthly";
-const isAllZoneSelected = (zone: SelectableZone): zone is "ALL" =>
-  zone === "ALL";
 type TrendDatum = {
   ts: number;
   time: string;
   dayLabel: string;
   [key: string]: number | string | undefined;
 };
-
-function dedupeAlertsById(alerts: AlertEvent[]) {
-  const seenIds = new Set<string>();
-
-  return alerts.filter((alert) => {
-    if (seenIds.has(alert.id)) return false;
-    seenIds.add(alert.id);
-    return true;
-  });
-}
 
 function readingClass(label: string, value: number, limit: number) {
   if (value <= limit) return "text-gray-900";
@@ -335,173 +343,6 @@ function buildCards(latest: DataPoint, zoneLabel: string): LiveCard[] {
   ];
 }
 
-function metricStatus(value: number, limit: number, highText = "High") {
-  return value > limit ? highText : "Normal";
-}
-
-function buildReportActions(summary: ReturnType<typeof summarizeData>) {
-  if (!summary) return ["No sensor data is available for this report window."];
-
-  const actions: string[] = [];
-  if (summary.temp.max > 32) {
-    actions.push("Check ventilation and cooling because temperature exceeded 32°C.");
-  }
-  if (summary.co2.max > 1200) {
-    actions.push("Increase air exchange because CO₂ exceeded 1200 ppm.");
-  }
-  if (summary.nh3.max > 5) {
-    actions.push("Inspect litter condition and airflow because NH₃ exceeded 5 ppm.");
-  }
-  if (summary.pm25.max > 35) {
-    actions.push("Review dust sources, feed handling, and cleaning because PM2.5 exceeded 35 µg/m³.");
-  }
-  if (summary.humidity.max > 85) {
-    actions.push("Reduce moisture sources because humidity exceeded 85%.");
-  }
-
-  return actions.length
-    ? actions
-    : ["Current readings are within configured thresholds. Continue routine monitoring."];
-}
-
-function buildReportMetricRows(latestData: DataPoint | undefined) {
-  return latestData
-    ? [
-        ["Temperature", `${latestData.temp.toFixed(2)} °C`, "≤ 32 °C", metricStatus(latestData.temp, 32)],
-        ["Humidity", `${latestData.humidity.toFixed(2)} %`, "≤ 85 %", metricStatus(latestData.humidity, 85)],
-        ["CO₂", `${latestData.co2.toFixed(0)} ppm`, "≤ 1200 ppm", metricStatus(latestData.co2, 1200)],
-        ["NH₃", `${latestData.nh3.toFixed(2)} ppm`, "≤ 5 ppm", metricStatus(latestData.nh3, 5)],
-        ["PM2.5", `${latestData.pm25.toFixed(2)} µg/m³`, "≤ 35 µg/m³", metricStatus(latestData.pm25, 35)],
-      ]
-    : [];
-}
-
-function countLatestAlerts(latestData: DataPoint | undefined) {
-  if (!latestData) return 0;
-  return [
-    latestData.temp > 32,
-    latestData.humidity > 85,
-    latestData.co2 > 1200,
-    latestData.nh3 > 5,
-    latestData.pm25 > 35,
-  ].filter(Boolean).length;
-}
-
-function reportStatus(alertCount: number, actions: string[]) {
-  return alertCount > 0
-    ? "Attention Required"
-    : actions.length > 1
-      ? "Watchlist"
-      : "Normal";
-}
-
-function reportStatusColor(status: string) {
-  if (status === "Normal") return "#15803d";
-  if (status === "Watchlist") return "#b45309";
-  return "#b91c1c";
-}
-
-function buildZoneReportSection(
-  label: string,
-  dataset: DataPoint[],
-  dateWindow: string,
-  options: { compact?: boolean } = {}
-) {
-  const latestData = dataset.at(-1);
-  const summary = summarizeData(dataset);
-  const actions = buildReportActions(summary);
-  const alertCount = countLatestAlerts(latestData);
-  const status = reportStatus(alertCount, actions);
-  const statusColor = reportStatusColor(status);
-  const metricRows = buildReportMetricRows(latestData);
-  const sectionBreak = options.compact ? "page-break-inside: avoid;" : "";
-
-  return `
-    <section style="${sectionBreak} margin-bottom: 28px; padding-bottom: 20px; border-bottom: 1px solid #e5e7eb;">
-      <div style="display:flex; justify-content:space-between; gap:16px; align-items:center; margin-bottom: 14px;">
-        <div>
-          <h2 style="color: #111827; font-size: 20px; margin: 0;">${label}</h2>
-          <p style="margin: 4px 0 0; color:#64748b; font-size: 13px;">Data window: ${dateWindow}</p>
-        </div>
-        <div style="text-align:right;">
-          <div style="display:inline-block; padding: 6px 12px; border-radius:999px; background:${statusColor}; color:#fff; font-size:12px; font-weight:700;">${status}</div>
-          <div style="margin-top:5px; color:#64748b; font-size:12px;">Records: ${dataset.length} · Alerts: ${alertCount}</div>
-        </div>
-      </div>
-
-      ${
-        metricRows.length > 0
-          ? `
-        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
-          <tr style="background-color: #eff6ff;">
-            <th style="border: 1px solid #dbeafe; padding: 10px; text-align: left;">Parameter</th>
-            <th style="border: 1px solid #dbeafe; padding: 10px; text-align: left;">Latest Value</th>
-            <th style="border: 1px solid #dbeafe; padding: 10px; text-align: left;">Threshold</th>
-            <th style="border: 1px solid #dbeafe; padding: 10px; text-align: left;">Status</th>
-          </tr>
-          ${metricRows
-            .map(
-              ([name, value, threshold, rowStatus], index) => `
-              <tr style="background-color: ${index % 2 ? "#f8fafc" : "#ffffff"};">
-                <td style="border: 1px solid #e5e7eb; padding: 10px;">${name}</td>
-                <td style="border: 1px solid #e5e7eb; padding: 10px; font-weight: 700;">${value}</td>
-                <td style="border: 1px solid #e5e7eb; padding: 10px;">${threshold}</td>
-                <td style="border: 1px solid #e5e7eb; padding: 10px; color: ${rowStatus === "Normal" ? "#15803d" : "#b91c1c"}; font-weight: 700;">${rowStatus}</td>
-              </tr>`
-            )
-            .join("")}
-        </table>`
-          : "<p style='color: #dc2626;'>No data available</p>"
-      }
-
-      ${
-        summary
-          ? `
-        <table style="width: 100%; border-collapse: collapse; margin-top: 14px;">
-          <tr style="background-color: #f8fafc;">
-            <th style="border: 1px solid #e5e7eb; padding: 9px; text-align: left;">Statistic</th>
-            <th style="border: 1px solid #e5e7eb; padding: 9px; text-align: left;">Temperature</th>
-            <th style="border: 1px solid #e5e7eb; padding: 9px; text-align: left;">Humidity</th>
-            <th style="border: 1px solid #e5e7eb; padding: 9px; text-align: left;">CO₂</th>
-            <th style="border: 1px solid #e5e7eb; padding: 9px; text-align: left;">NH₃</th>
-            <th style="border: 1px solid #e5e7eb; padding: 9px; text-align: left;">PM2.5</th>
-          </tr>
-          <tr>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">Average</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.temp.avg.toFixed(2)} °C</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.humidity.avg.toFixed(2)} %</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.co2.avg.toFixed(0)} ppm</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.nh3.avg.toFixed(2)} ppm</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.pm25.avg.toFixed(2)} µg/m³</td>
-          </tr>
-          <tr style="background:#f8fafc;">
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">Peak</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.temp.max.toFixed(2)} °C</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.humidity.max.toFixed(2)} %</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.co2.max.toFixed(0)} ppm</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.nh3.max.toFixed(2)} ppm</td>
-            <td style="border: 1px solid #e5e7eb; padding: 9px;">${summary.pm25.max.toFixed(2)} µg/m³</td>
-          </tr>
-        </table>`
-          : ""
-      }
-
-      <div style="margin-top: 14px; background:#fff7ed; border:1px solid #fed7aa; border-radius: 10px; padding: 13px;">
-        <h3 style="color: #111827; font-size: 15px; margin: 0 0 8px;">Recommended Actions</h3>
-        <ol style="margin: 0; padding-left: 20px;">
-          ${actions.map((action) => `<li style="margin-bottom: 6px;">${action}</li>`).join("")}
-        </ol>
-      </div>
-    </section>
-  `;
-}
-
-const zoneLegendConfig = {
-  A: { label: "Zone A", dot: "bg-red-500", text: "text-red-500" },
-  B: { label: "Zone B", dot: "bg-blue-500", text: "text-blue-500" },
-  C: { label: "Zone C", dot: "bg-green-500", text: "text-green-500" },
-} as const;
-
 const ZONE_COLORS = {
   A: "#f97316",
   B: "#3b82f6",
@@ -513,6 +354,29 @@ type ScatterTooltipProps = {
   active?: boolean;
   payload?: any[];
 };
+
+function SensorPairLegend({
+  metrics,
+}: {
+  metrics: [SensorMetric, SensorMetric];
+}) {
+  return (
+    <div className="mt-3 flex justify-center gap-6 text-sm">
+      {metrics.map((metric) => (
+        <span
+          key={metric}
+          className="flex items-center gap-2 text-slate-600"
+        >
+          <span
+            className="h-3 w-3 rounded-full"
+            style={{ backgroundColor: SENSOR_METRIC_COLORS[metric] }}
+          />
+          {SENSOR_ALERT_RULES[metric].label}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 // ---------- Temp vs CO2 ----------
 function TempCo2Tooltip({ active, payload }: ScatterTooltipProps) {
@@ -588,10 +452,8 @@ function CardItem({ item }: CardItemProps) {
   );
 }
 
-export default function DashboardPage() {
-  const [selectedZone, setSelectedZone] = useState<SelectableZone>(
-    IS_SINGLE_ZONE ? (ACTIVE_ZONES[0] ?? "A") : "ALL"
-  );
+function DashboardContent() {
+  const { activeTab, selectedZone } = useDashboardNavigation();
   const isAllZone = selectedZone === "ALL";
 
   // ====== Sensor data ======
@@ -599,20 +461,20 @@ export default function DashboardPage() {
   //const [index, setIndex] = useState(0);
   //const [lastUpdate, setLastUpdate] = useState<string>("");
   const [weights, setWeights] = usePersistentState<WeightEntry[]>(
-    "broiler-dashboard:v9:audit-weights",
-    () => []
+    "broiler-dashboard:v11:current-weights",
+    () => createInitialCurrentCycleRecords().weights
   );
   // ====== Health & Behavior (prototype) ======
   // Mortality
   const [mortality, setMortality] = usePersistentState<MortalityEntry[]>(
-    "broiler-dashboard:v9:audit-mortality",
-    () => []
+    "broiler-dashboard:v11:current-mortality",
+    () => createInitialCurrentCycleRecords().mortality
   );
   const [storedCycles, setCycles] = usePersistentState<
     Record<Zone, ProductionCycle>
   >(
-    "broiler-dashboard:v9:audit-zone-cycles",
-    createDraftProductionCycles
+    "broiler-dashboard:v11:current-zone-cycles",
+    createInitialProductionCycles
   );
   const cyclesByZone = useMemo<Record<Zone, ProductionCycle>>(
     () =>
@@ -649,22 +511,10 @@ export default function DashboardPage() {
     if (needsNormalization) setCycles(cyclesByZone);
   }, [cyclesByZone, setCycles, storedCycles]);
 
-  const [alerts, setAlerts] = usePersistentState<AlertEvent[]>(
-    "broiler-dashboard:v9:audit-alerts",
-    () => []
-  );
-  const [soundEnabled, setSoundEnabled] = useState(false);
-  const [latestToast, setLatestToast] = useState<AlertEvent | null>(null);
-  const alertFlagsRef = useRef<Record<Zone, Record<SensorMetric, boolean>>>({
-    A: { temp: false, humidity: false, co2: false, nh3: false, pm25: false },
-    B: { temp: false, humidity: false, co2: false, nh3: false, pm25: false },
-    C: { temp: false, humidity: false, co2: false, nh3: false, pm25: false },
-  });
-
   // Consumption
   const [consumptions, setConsumptions] = usePersistentState<ConsumptionEntry[]>(
-    "broiler-dashboard:v9:audit-consumptions",
-    () => []
+    "broiler-dashboard:v11:current-consumptions",
+    () => createInitialCurrentCycleRecords().consumptions
   );
 
   const cycleMortality = useMemo(
@@ -700,23 +550,6 @@ export default function DashboardPage() {
       ),
     [cyclesByZone, weights]
   );
-  const cycleAlerts = useMemo(
-    () =>
-      dedupeAlertsById(
-        alerts.filter(
-          (entry) => entry.cycleId === cyclesByZone[entry.zone].id
-        )
-      ),
-    [alerts, cyclesByZone]
-  );
-  const visibleAlerts = useMemo(
-    () =>
-      selectedZone === "ALL"
-        ? cycleAlerts
-        : cycleAlerts.filter((entry) => entry.zone === selectedZone),
-    [cycleAlerts, selectedZone]
-  );
-
   // ===== Visualization Controls =====
   // ===== Visualization Controls =====
   const [selectedParam, setSelectedParam] = useState<
@@ -724,6 +557,28 @@ export default function DashboardPage() {
   >("all");
   // ===== PDF Report Download =====
   const [isDownloadingPDF, setIsDownloadingPDF] = useState(false);
+  const [isDownloadingHistoricalPDF, setIsDownloadingHistoricalPDF] =
+    useState(false);
+  const [currentReportAnalysis, setCurrentReportAnalysis] =
+    useState<CurrentCycleReportAnalysisSnapshot | null>(null);
+  const [historicalReportAnalyses, setHistoricalReportAnalyses] = useState<
+    Record<string, HistoricalCycleReportAnalysisSnapshot>
+  >({});
+  const handleCurrentReportAnalysisChange = useCallback(
+    (snapshot: CurrentCycleReportAnalysisSnapshot) => {
+      setCurrentReportAnalysis(snapshot);
+    },
+    []
+  );
+  const handleHistoricalReportAnalysisChange = useCallback(
+    (snapshot: HistoricalCycleReportAnalysisSnapshot) => {
+      setHistoricalReportAnalyses((current) => ({
+        ...current,
+        [snapshot.cycleId]: snapshot,
+      }));
+    },
+    []
+  );
 
   const [aggregation, setAggregation] = useState<AggregationMode>("daily");
   const [selectedHistoricalCycleKey, setSelectedHistoricalCycleKey] =
@@ -806,6 +661,40 @@ export default function DashboardPage() {
     () => aggregateTrendRecords(chartData, appliedAggregation),
     [appliedAggregation, chartData]
   );
+  const historicalTrendSummaries = useMemo(
+    () =>
+      Object.fromEntries(
+        SENSOR_METRICS.map((metric) => {
+          const values = chartData.map((point) => point[metric]);
+          const rule = SENSOR_ALERT_RULES[metric];
+          return [
+            metric,
+            {
+              average: values.length
+                ? values.reduce((total, value) => total + value, 0) /
+                  values.length
+                : 0,
+              minimum: values.length ? Math.min(...values) : 0,
+              maximum: values.length ? Math.max(...values) : 0,
+              latest: values.at(-1) ?? 0,
+              exceedances: values.filter(
+                (value) => value > rule.threshold
+              ).length,
+            },
+          ];
+        })
+      ) as Record<
+        SensorMetric,
+        {
+          average: number;
+          minimum: number;
+          maximum: number;
+          latest: number;
+          exceedances: number;
+        }
+      >,
+    [chartData]
+  );
 
   // =====================================================
   // ✅ showParam JUGA HARUS DI SINI
@@ -823,7 +712,6 @@ export default function DashboardPage() {
     if (selectedZone === "ALL") {
       return ACTIVE_ZONES.map((zone) => ({
         zone,
-        color: ZONE_COLORS[zone],
         data: applyAgg(zoneData[zone]),
       }));
     }
@@ -831,7 +719,6 @@ export default function DashboardPage() {
     return [
       {
         zone: selectedZone,
-        color: ZONE_COLORS[selectedZone],
         data: aggregatedData,
       },
     ];
@@ -865,6 +752,20 @@ export default function DashboardPage() {
       C: getZonePoint(livePoint, latestIndex, allData.length, "C"),
     };
   }, [allData.length, livePoint]);
+  const {
+    cycleAlerts,
+    visibleAlerts,
+    latestToast,
+    soundEnabled,
+    toggleSound,
+    acknowledgeAlert,
+    resetZoneAlerts,
+  } = useCycleAlerts({
+    activeZones: ACTIVE_ZONES,
+    cyclesByZone,
+    liveZoneData,
+    selectedZone,
+  });
 
   // ====== Fetch sensor data from local data API ======
   useEffect(() => {
@@ -892,98 +793,6 @@ export default function DashboardPage() {
       isMounted = false;
     };
   }, []);
-
-  useEffect(() => {
-    if (!liveZoneData) return;
-
-    const nextFlags = Object.fromEntries(
-      ALL_ZONES.map((zone) => [zone, { ...alertFlagsRef.current[zone] }])
-    ) as Record<Zone, Record<SensorMetric, boolean>>;
-    const newAlerts: AlertEvent[] = [];
-    const resolvedConditions: Array<{ zone: Zone; metric: SensorMetric }> = [];
-
-    ACTIVE_ZONES.forEach((zone) => {
-      const zoneCycle = cyclesByZone[zone];
-      if (zoneCycle.status !== "active") return;
-
-      const point = liveZoneData[zone];
-      getSensorAlertConditions(point).forEach((condition) => {
-        const isAbove = condition.value > condition.threshold;
-        const wasAbove = alertFlagsRef.current[zone][condition.metric];
-
-        if (isAbove && !wasAbove) {
-          newAlerts.push({
-            id: `${zoneCycle.id}-${zone}-${condition.metric}-${point.ts}`,
-            cycleId: zoneCycle.id,
-            zone,
-            metric: condition.metric,
-            label: condition.label,
-            timestamp: point.time,
-            value: condition.value,
-            threshold: condition.threshold,
-            unit: condition.unit,
-            severity:
-              condition.value >= condition.criticalThreshold
-                ? "critical"
-                : "warning",
-            status: "active",
-            message: `Zone ${zone}: ${condition.label} crossed its configured limit. ${condition.action}`,
-          });
-        }
-
-        if (!isAbove && wasAbove) {
-          resolvedConditions.push({ zone, metric: condition.metric });
-        }
-        nextFlags[zone][condition.metric] = isAbove;
-      });
-    });
-
-    alertFlagsRef.current = nextFlags;
-    const existingAlertIds = new Set(alerts.map((alert) => alert.id));
-    const uniqueNewAlerts = newAlerts.filter(
-      (alert) => !existingAlertIds.has(alert.id)
-    );
-
-    if (uniqueNewAlerts.length || resolvedConditions.length) {
-      setAlerts((previous) => {
-        const resolved = previous.map((alert) => {
-          const shouldResolve = resolvedConditions.some(
-            ({ zone, metric }) =>
-              alert.zone === zone &&
-              alert.cycleId === cyclesByZone[zone].id &&
-              alert.metric === metric
-          );
-          return shouldResolve && alert.status !== "resolved"
-            ? { ...alert, status: "resolved" as const }
-            : alert;
-        });
-        return dedupeAlertsById([...uniqueNewAlerts, ...resolved]).slice(0, 100);
-      });
-    }
-
-    if (uniqueNewAlerts.length) {
-      setLatestToast(uniqueNewAlerts[0]);
-      if (soundEnabled) {
-        void new Audio("/sound/alert.mp3").play().catch(() => undefined);
-      }
-    }
-  }, [alerts, cyclesByZone, liveZoneData, setAlerts, soundEnabled]);
-
-  useEffect(() => {
-    if (!latestToast) return;
-    const timeout = window.setTimeout(() => setLatestToast(null), 6000);
-    return () => window.clearTimeout(timeout);
-  }, [latestToast]);
-
-  const acknowledgeAlert = (id: string) => {
-    setAlerts((previous) =>
-      previous.map((alert) =>
-        alert.id === id && alert.status === "active"
-          ? { ...alert, status: "acknowledged" }
-          : alert
-      )
-    );
-  };
 
   // ==== SAFE derivations tanpa early-return ====
   const liveByZone = useMemo(() => {
@@ -1245,6 +1054,14 @@ export default function DashboardPage() {
   );
   const reportZone: Zone = reportZones[0] ?? "A";
   const reportDataset = reportDatasets[reportZone];
+  const productionReportZones = useMemo(
+    () =>
+      reportZones.filter(
+        (zone) => cyclesByZone[zone].status !== "draft"
+      ),
+    [cyclesByZone, reportZones]
+  );
+  const productionReportZone = productionReportZones[0] ?? reportZone;
   const currentProductionByZone = useMemo<Record<Zone, HistoricalProductionData>>(() => {
     return Object.fromEntries(
       ALL_ZONES.map((zone) => {
@@ -1302,13 +1119,13 @@ export default function DashboardPage() {
   ]);
   const currentProductionSeries = useMemo<ProductionPerformanceSeries[]>(
     () =>
-      reportZones.map((zone) => ({
+      productionReportZones.map((zone) => ({
         key: zone,
         label: `Zone ${zone}`,
         color: ZONE_COLORS[zone],
         production: currentProductionByZone[zone],
       })),
-    [currentProductionByZone, reportZones]
+    [currentProductionByZone, productionReportZones]
   );
 
   const harvestSummariesByZone = useMemo<Record<Zone, HarvestSummary>>(
@@ -1337,6 +1154,22 @@ export default function DashboardPage() {
     ]
   );
   const harvestSummary = harvestSummariesByZone[reportZone];
+  const cycleRiskAssessmentsByZone = useMemo<Record<
+    Zone,
+    CycleRiskAssessment
+  >>(
+    () =>
+      Object.fromEntries(
+        ALL_ZONES.map((zone) => [
+          zone,
+          assessCurrentCycleRisk({
+            harvest: harvestSummariesByZone[zone],
+            sensorData: reportDatasets[zone],
+          }),
+        ])
+      ) as Record<Zone, CycleRiskAssessment>,
+    [harvestSummariesByZone, reportDatasets]
+  );
   const currentPredictionInputs = useMemo<CurrentCyclePredictionInput[]>(
     () =>
       reportZones
@@ -1383,14 +1216,7 @@ export default function DashboardPage() {
 
     const nextCycle = startProductionCycle({ ...input, id: cycleId }, zone);
     setCycles((current) => ({ ...current, [zone]: nextCycle }));
-    setLatestToast(null);
-    alertFlagsRef.current[zone] = {
-      temp: false,
-      humidity: false,
-      co2: false,
-      nh3: false,
-      pm25: false,
-    };
+    resetZoneAlerts(zone);
   };
 
   const handleCompleteCycle = (input: CompleteCycleInput) => {
@@ -1452,19 +1278,7 @@ export default function DashboardPage() {
         (entry) => entry.zone !== zone || entry.cycleId !== cycleId
       )
     );
-    setAlerts((current) =>
-      current.filter(
-        (entry) => entry.zone !== zone || entry.cycleId !== cycleId
-      )
-    );
-    setLatestToast(null);
-    alertFlagsRef.current[zone] = {
-      temp: false,
-      humidity: false,
-      co2: false,
-      nh3: false,
-      pm25: false,
-    };
+    resetZoneAlerts(zone, cycleId);
   };
 
   const handleReopenCycle = (reason: string) => {
@@ -1490,274 +1304,72 @@ export default function DashboardPage() {
     );
   };
 
-  const deterministicSummary = useMemo(
-    () => buildDeterministicCycleSummary(cycle, harvestSummary, reportDataset),
-    [cycle, harvestSummary, reportDataset]
-  );
-
-  const reportSummary = useMemo(() => summarizeData(reportDataset), [reportDataset]);
-
-  const reportActions = useMemo(() => {
-    return buildReportActions(reportSummary);
-  }, [reportSummary]);
-
-  // ===== PDF Report Generation =====
   const generatePDFReport = async () => {
     try {
       setIsDownloadingPDF(true);
-
-      // Create a temporary container for report content
-      const reportContainer = document.createElement("div");
-      reportContainer.style.position = "absolute";
-      reportContainer.style.left = "-9999px";
-      reportContainer.style.width = "1000px";
-      reportContainer.style.padding = "40px";
-      reportContainer.style.backgroundColor = "white";
-      reportContainer.style.fontFamily = "Arial, sans-serif";
-
-      // Generate report HTML
-      const reportDate = new Date().toLocaleDateString("id-ID", {
-        year: "numeric",
-        month: "long",
-        day: "numeric",
-      });
-
-      const selectedZoneLabel = `${cycle.houseName} · Zone ${reportZone}`;
-
-      const latestData = reportDataset.at(-1);
-      const generatedAt = new Date().toLocaleString("id-ID");
-      const dateWindow =
-        sensorMeta?.runtimeStart && sensorMeta?.runtimeEnd
-          ? `${sensorMeta.runtimeStart} to ${sensorMeta.runtimeEnd}`
-          : `${reportDataset[0]?.time ?? "-"} to ${latestData?.time ?? "-"}`;
-      const alertCount = harvestSummary.alertCount;
-      const overallStatus = reportStatus(alertCount, reportActions);
-      const statusColor = reportStatusColor(overallStatus);
-      const zoneSections = buildZoneReportSection(
-        selectedZoneLabel,
-        reportDataset,
-        dateWindow
+      await downloadCycleReportPdf(
+        buildCurrentCycleReportModel({
+          cycle,
+          zone: reportZone,
+          sensorData: reportDataset,
+          harvestSummary,
+          riskAssessment: cycleRiskAssessmentsByZone[reportZone],
+          activeAlertCount: cycleAlerts.filter(
+            (entry) =>
+              entry.zone === reportZone && entry.status === "active"
+          ).length,
+          analysisSnapshot: currentReportAnalysis,
+        })
       );
-      const reportNarrative = escapeHtml(deterministicSummary).replaceAll(
-        "\n",
-        "<br/>"
-      );
-      const safeCycleId = cycle.id.replace(/[^a-zA-Z0-9_-]/g, "_");
-
-      const reportHTML = `
-        <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #172033;">
-          <div style="display: flex; justify-content: space-between; gap: 24px; margin-bottom: 24px; border-bottom: 3px solid #2563eb; padding-bottom: 18px;">
-            <div>
-              <h1 style="margin: 0; color: #111827; font-size: 30px;">Broiler End-of-Cycle Report</h1>
-              <p style="margin: 6px 0 0; color: #64748b; font-size: 14px;">iSENS-COOP Smart Sensing System</p>
-            </div>
-            <div style="text-align: right;">
-              <div style="display: inline-block; padding: 8px 14px; border-radius: 999px; background: ${statusColor}; color: #fff; font-weight: 700;">${overallStatus}</div>
-              <p style="margin: 10px 0 0; color: #64748b; font-size: 12px;">${reportDate}</p>
-            </div>
-          </div>
-
-          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 26px;">
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">House</div>
-              <div style="font-size: 20px; font-weight: 700;">${escapeHtml(selectedZoneLabel)}</div>
-            </div>
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Cycle</div>
-              <div style="font-size: 16px; font-weight: 700;">${escapeHtml(cycle.id)}</div>
-              <div style="margin-top:4px; font-size:11px; color:#64748b; text-transform:uppercase;">${cycle.status} · revision ${cycle.revision}</div>
-            </div>
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Birds Remaining</div>
-              <div style="font-size: 20px; font-weight: 700;">${harvestSummary.survivingBirds.toLocaleString()}</div>
-            </div>
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius: 10px; padding: 14px;">
-              <div style="font-size: 11px; color:#64748b; text-transform: uppercase;">Generated</div>
-              <div style="font-size: 13px; font-weight: 700;">${generatedAt}</div>
-            </div>
-          </div>
-
-          <section style="page-break-inside: avoid; margin-bottom: 28px;">
-            <h2 style="font-size:20px; margin:0 0 12px;">Production & Harvest KPI</h2>
-            <table style="width:100%; border-collapse:collapse; font-size:13px;">
-              <tr style="background:#eff6ff;">
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Birds placed</th>
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Mortality</th>
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Mortality rate</th>
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Final avg weight</th>
-              </tr>
-              <tr>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${cycle.initialBirds.toLocaleString()}</td>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalMortality}</td>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.mortalityRate.toFixed(2)}%</td>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.finalAverageWeightKg.toFixed(3)} kg</td>
-              </tr>
-              <tr style="background:#eff6ff;">
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Feed / bird</th>
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Water / bird</th>
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">FCR estimate</th>
-                <th style="border:1px solid #dbeafe; padding:9px; text-align:left;">Live weight</th>
-              </tr>
-              <tr>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalFeedPerBirdKg.toFixed(2)} kg</td>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalWaterPerBirdL.toFixed(2)} L</td>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.fcr.toFixed(2)}</td>
-                <td style="border:1px solid #e5e7eb; padding:9px;">${harvestSummary.totalLiveWeightKg.toFixed(0)} kg</td>
-              </tr>
-            </table>
-            <div style="margin-top:12px; padding:12px; border-radius:10px; background:#f0fdf4; border:1px solid #bbf7d0;">
-              <strong>Sensor health: ${harvestSummary.sensorHealth.status}</strong> · ${harvestSummary.sensorHealth.completeness.toFixed(1)}% completeness · ${harvestSummary.alertCount} alert events
-            </div>
-          </section>
-
-          ${zoneSections}
-
-          <section style="page-break-inside: avoid; margin: 24px 0; padding:16px; border:1px solid #c4b5fd; background:#f5f3ff; border-radius:12px;">
-            <h2 style="font-size:20px; margin:0 0 10px; color:#5b21b6;">AI-Assisted Cycle Summary</h2>
-            <div style="font-size:13px;">${reportNarrative}</div>
-            <p style="font-size:11px; color:#6b7280; margin:12px 0 0;">Decision-support narrative. Confirm findings through physical inspection and farm records.</p>
-          </section>
-
-          <div style="margin-top: 40px; padding-top: 20px; border-top: 2px solid #e5e7eb; font-size: 12px; color: #999;">
-            <p>This report was generated by iSENS-COOP System for monitoring and operational review.</p>
-            <p>Interpret recommendations together with physical inspection and farm management records.</p>
-          </div>
-        </div>
-      `;
-
-      reportContainer.innerHTML = reportHTML;
-      document.body.appendChild(reportContainer);
-
-      // Convert HTML to canvas
-      const canvas = await html2canvas(reportContainer, {
-        backgroundColor: "#ffffff",
-        scale: 2,
-        logging: false,
-      });
-
-      // Create PDF
-      const pdf = new jsPDF({
-        orientation: "portrait",
-        unit: "mm",
-        format: "a4",
-      });
-
-      const imgData = canvas.toDataURL("image/png");
-      const imgWidth = 210; // A4 width in mm
-      const pageHeight = 297; // A4 height in mm
-      const imgHeight = canvas.height * (imgWidth / canvas.width);
-      let heightLeft = imgHeight;
-      let position = 0;
-
-      // Add image to PDF
-      pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-      heightLeft -= pageHeight;
-
-      // Add multiple pages if needed
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgWidth, imgHeight);
-        heightLeft -= pageHeight;
-      }
-
-      // Download PDF
-      pdf.save(`broiler_cycle_report_${safeCycleId}_${reportDate}.pdf`);
-
-      // Clean up
-      document.body.removeChild(reportContainer);
     } catch (error) {
-      console.error("Error generating PDF:", error);
-      alert("Failed to generate PDF report");
+      console.error("Error generating current-cycle PDF:", error);
+      alert("Failed to generate the current-cycle PDF report.");
     } finally {
       setIsDownloadingPDF(false);
     }
   };
 
+  const generateHistoricalPDFReport = async () => {
+    if (!selectedHistoricalCycle) return;
+
+    try {
+      setIsDownloadingHistoricalPDF(true);
+      await downloadCycleReportPdf(
+        buildHistoricalCycleReportModel({
+          historicalCycle: selectedHistoricalCycle,
+          cyclesByZone,
+          analysisSnapshot:
+            historicalReportAnalyses[selectedHistoricalCycle.id],
+        })
+      );
+    } catch (error) {
+      console.error("Error generating completed-cycle PDF:", error);
+      alert("Failed to generate the completed-cycle PDF report.");
+    } finally {
+      setIsDownloadingHistoricalPDF(false);
+    }
+  };
+
   return (
-    <div className="flex min-h-screen w-full max-w-none flex-col gap-8 px-3 py-6 sm:px-5 lg:px-8 2xl:px-10">
-      {/* Header */}
-      <header className="mb-0 flex flex-col items-center justify-center gap-4 xl:flex-row xl:gap-8">
-        <div className="flex shrink-0 gap-4">
-          <Image
-            src="/img/umpsa.png"
-            alt="Logo UMPSA"
-            width={6000}
-            height={1115}
-            priority
-            className="h-20 w-auto object-contain sm:h-24 xl:h-20"
-          />
-        </div>
-        <div className="text-center xl:text-left">
-          <h1 className="text-3xl font-bold xl:max-w-4xl">
-            iSENS-COOP: Smart Sensing System for Poultry House Monitoring
-          </h1>
-        </div>
-      </header>
-
-      <hr className="border-gray-300 my-4" />
-      {/* Global Controls - Sticky */}
-      <section className="sticky top-0 z-50 bg-gray-50 rounded-2xl p-4 shadow-lg border-b-2 border-gray-300">
-        <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3 items-center">
-          <div className="flex flex-wrap items-center gap-3">
-            <div>
-              <div className="text-xs uppercase tracking-wide text-gray-500">Monitored house</div>
-              {IS_SINGLE_ZONE ? (
-                <div className="font-semibold">
-                  {cycle.houseName} · Zone {ACTIVE_ZONES[0]}
-                </div>
-              ) : (
-                <select
-                  value={selectedZone}
-                  onChange={(event) =>
-                    setSelectedZone(event.target.value as SelectableZone)
-                  }
-                  className="mt-1 min-w-40 rounded-lg border border-gray-300 bg-white px-3 py-2 font-semibold"
-                  aria-label="Select monitored zone"
-                >
-                  <option value="ALL">All Zones</option>
-                  {ACTIVE_ZONES.map((zone) => (
-                    <option key={zone} value={zone}>
-                      Zone {zone}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-            <span className="text-xs px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200">
-              Sensor Replay · {REALTIME_INTERVAL_MS / 1000}s refresh
-            </span>
-            {reportZones.map((zone) => {
-              const zoneCycle = cyclesByZone[zone];
-              const zoneSummary = harvestSummariesByZone[zone];
-              return (
-                <span
-                  key={zone}
-                  className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"
-                >
-                  Zone {zone} ·{" "}
-                  {zoneCycle.status === "draft"
-                    ? "Not started"
-                    : zoneCycle.status === "completed"
-                      ? "Completed"
-                      : `Active · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`}
-                </span>
-              );
-            })}
-            <span className="text-xs text-gray-500">
-              Current record: {latestSafe.time}
-            </span>
-          </div>
-
-          <NotificationCenter
-            alerts={visibleAlerts}
-            soundEnabled={soundEnabled}
-            onToggleSound={() => setSoundEnabled((enabled) => !enabled)}
-            onAcknowledge={acknowledgeAlert}
-          />
-
-        </div>
-      </section>
+    <DashboardShell
+      toolbar={
+        <DashboardToolbar
+          activeZones={ACTIVE_ZONES}
+          isSingleZone={IS_SINGLE_ZONE}
+          cycle={cycle}
+          cyclesByZone={cyclesByZone}
+          reportZones={reportZones}
+          harvestSummariesByZone={harvestSummariesByZone}
+          cycleRiskAssessmentsByZone={cycleRiskAssessmentsByZone}
+          latestTime={latestSafe.time}
+          refreshIntervalMs={REALTIME_INTERVAL_MS}
+          alerts={visibleAlerts}
+          soundEnabled={soundEnabled}
+          onToggleSound={toggleSound}
+          onAcknowledge={acknowledgeAlert}
+        />
+      }
+    >
 
       {latestToast && (
         <div className={`fixed top-24 right-6 z-[80] max-w-sm rounded-2xl border shadow-2xl p-4 ${latestToast.severity === "critical" ? "bg-red-50 border-red-300" : "bg-amber-50 border-amber-300"}`}>
@@ -1767,6 +1379,9 @@ export default function DashboardPage() {
         </div>
       )}
 
+      <DashboardTabPanel>
+      {activeTab === "overview" && (
+        <>
       <section className="rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white p-5">
         <div className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
           Current Data Monitoring
@@ -1933,7 +1548,7 @@ export default function DashboardPage() {
                   : "-"}
               </div>
               <div>📦 Records: {sensorMeta?.records ?? allData.length}</div>
-              <div>🧪 Data Source: Sensor Replay</div>
+              <div>🧪 Data Source: Environmental Sensors</div>
               <div>
                 ✅ Completeness: {harvestSummary.sensorHealth.completeness.toFixed(1)}%
               </div>
@@ -1946,10 +1561,14 @@ export default function DashboardPage() {
           </section>
         </div>
       </div>
+        </>
+      )}
 
-      <CurrentCycleSensorTrends series={visibleSensorSeries} />
+      {activeTab === "environment" && (
+        <CurrentCycleSensorTrends series={visibleSensorSeries} />
+      )}
 
-      {selectedZone !== "ALL" ? (
+      {activeTab === "production" && (selectedZone !== "ALL" ? (
         <ProductionCyclePanel
           key={`${cycle.zone}:${cycle.id}`}
           cycle={cycle}
@@ -1968,9 +1587,11 @@ export default function DashboardPage() {
             ? "Multi-zone sensor and production comparisons are shown below. Select a specific zone to manage its cycle."
             : "Environmental sensors remain active across all three zones. Select a specific zone when you are ready to start its production cycle."}
         </section>
-      )}
+      ))}
 
       {/* ================= HISTORICAL TREND ANALYSIS ================= */}
+      {activeTab === "history" && (
+        <>
       <section
         data-testid="historical-data-section"
         className="order-2"
@@ -2011,35 +1632,50 @@ export default function DashboardPage() {
                       No completed cycle data
                     </span>
                   ) : (
-                    <button
-                      type="button"
-                      aria-expanded={isHistoricalDataOpen}
-                      aria-controls="historical-data-content"
-                      onClick={() =>
-                        setIsHistoricalDataOpen((isOpen) => !isOpen)
-                      }
-                      className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"
-                    >
-                      {isHistoricalDataOpen
-                        ? "Hide Historical Data"
-                        : "Show Historical Data"}
-                      <svg
-                        aria-hidden="true"
-                        viewBox="0 0 20 20"
-                        fill="none"
-                        className={`h-4 w-4 transition-transform ${
-                          isHistoricalDataOpen ? "rotate-180" : ""
-                        }`}
+                    <>
+                      <button
+                        type="button"
+                        aria-expanded={isHistoricalDataOpen}
+                        aria-controls="historical-data-content"
+                        onClick={() =>
+                          setIsHistoricalDataOpen((isOpen) => !isOpen)
+                        }
+                        className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 py-2.5 text-sm font-semibold text-violet-700 shadow-sm transition hover:border-violet-300 hover:bg-violet-50"
                       >
-                        <path
-                          d="m5 7.5 5 5 5-5"
-                          stroke="currentColor"
-                          strokeWidth="1.8"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                    </button>
+                        {isHistoricalDataOpen
+                          ? "Hide Historical Data"
+                          : "Show Historical Data"}
+                        <svg
+                          aria-hidden="true"
+                          viewBox="0 0 20 20"
+                          fill="none"
+                          className={`h-4 w-4 transition-transform ${
+                            isHistoricalDataOpen ? "rotate-180" : ""
+                          }`}
+                        >
+                          <path
+                            d="m5 7.5 5 5 5-5"
+                            stroke="currentColor"
+                            strokeWidth="1.8"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={generateHistoricalPDFReport}
+                        disabled={
+                          isDownloadingHistoricalPDF ||
+                          !selectedHistoricalCycle
+                        }
+                        className="inline-flex min-w-52 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:bg-violet-300"
+                      >
+                        {isDownloadingHistoricalPDF
+                          ? "Generating completed report…"
+                          : "Download Completed Cycle Report"}
+                      </button>
+                    </>
                   )}
                 </>
               )}
@@ -2050,22 +1686,46 @@ export default function DashboardPage() {
 
       {selectedZone !== "ALL" && isHistoricalDataOpen && (
         <>
-          <section id="historical-data-content" className="order-2">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
-          <h2 className="text-2xl font-semibold">
-            Historical Cycle Trends · Zone {selectedZone}
-          </h2>
-          <span className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
-            Zone {selectedZone} history · imported source
-          </span>
-        </div>
-        <p className="mb-4 text-sm text-gray-500">
-          These charts use complete stored Zone {selectedZone} production
-          cycles. Realtime sensor replay only updates the readings and alerts
-          above.
-        </p>
+          <section
+            id="historical-data-content"
+            className="order-2 overflow-hidden rounded-2xl border border-violet-100 bg-white shadow"
+          >
+            <div className="border-b border-violet-100 bg-gradient-to-r from-violet-50 via-fuchsia-50/50 to-white p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
+                    Completed cycle environment
+                  </div>
+                  <h2 className="mt-1 text-2xl font-semibold text-slate-950">
+                    Historical Cycle Sensor Trends
+                  </h2>
+                  <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                    Complete stored environmental readings for Zone{" "}
+                    {selectedZone}. Select a completed cycle and aggregation to
+                    review its performance consistently with the Current Cycle
+                    view.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full border border-violet-100 bg-white px-2.5 py-1 text-violet-800">
+                      Zone {selectedZone} completed records
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
+                      {selectedHistoricalCycle?.id ?? "Completed cycle"}
+                    </span>
+                    <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
+                      {chartData.length} stored readings
+                    </span>
+                  </div>
+                </div>
+                <span className="w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+                  {selectedHistoricalCycle?.status ?? "Completed"}
+                </span>
+              </div>
+            </div>
 
-        <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="p-5">
+
+        <div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
           <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <label className="block w-full md:max-w-xl">
               <span className="mb-1.5 block text-sm font-medium text-gray-700">
@@ -2090,8 +1750,8 @@ export default function DashboardPage() {
                 ))}
               </select>
             </label>
-            <span className="w-fit rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700">
-              {selectedHistoricalCycle?.status ?? "Completed"}
+            <span className="w-fit rounded-full border border-violet-100 bg-white px-2.5 py-1 text-xs font-medium text-violet-700">
+              Cycle snapshot
             </span>
           </div>
 
@@ -2161,7 +1821,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Controls */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
             <label
               htmlFor="historical-parameter"
@@ -2173,7 +1834,7 @@ export default function DashboardPage() {
               id="historical-parameter"
               value={selectedParam}
               onChange={(e) => setSelectedParam(e.target.value as any)}
-              className="w-full border rounded-lg px-3 py-2"
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-100"
             >
               <option value="all">All Parameters</option>
               <option value="temp">Temperature (°C)</option>
@@ -2195,7 +1856,7 @@ export default function DashboardPage() {
               id="historical-aggregation"
               value={aggregation}
               onChange={(e) => setAggregation(e.target.value as any)}
-              className="w-full border rounded-lg px-3 py-2"
+              className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm shadow-sm focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-100"
             >
               <option value="all">Raw stored readings</option>
               <option value="hourly">Hourly average</option>
@@ -2205,7 +1866,7 @@ export default function DashboardPage() {
             </select>
           </div>
         </div>
-        <div className="flex justify-end mt-4">
+        <div className="mt-4 flex justify-end">
           <button
             onClick={() => {
               setIsApplying(true);
@@ -2221,7 +1882,7 @@ export default function DashboardPage() {
       ${
         isApplying
           ? "bg-gray-400 cursor-not-allowed"
-          : "bg-blue-600 hover:bg-blue-700"
+          : "bg-violet-600 hover:bg-violet-700"
       }
     `}
             disabled={isApplying}
@@ -2237,349 +1898,185 @@ export default function DashboardPage() {
             </span>
           </div>
         )}
+        </div>
         {isApplying && (
           <div className="flex justify-center items-center h-48 text-gray-500">
             <span className="animate-pulse">Loading trend data…</span>
           </div>
         )}
         {!isApplying && (
-          <>
+          <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-3">
+            {SENSOR_METRICS.filter(showParam).map(
+              (metric, index, visibleMetrics) => {
+                const rule = SENSOR_ALERT_RULES[metric];
+                const summary = historicalTrendSummaries[metric];
+                const historicalZone = selectedZone as Zone;
 
-        {/* ================= TEMPERATURE ================= */}
-        {showParam("temp") && (
-          <div className="mb-6 bg-white rounded-2xl shadow p-4 h-72">
-            <h3 className="font-semibold">Temperature (°C)</h3>
-
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="ts"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(value) =>
-                    formatTrendTick(value, appliedAggregation)
-                  }
-                  minTickGap={55}
-                  tickCount={6}
-                />
-                <YAxis />
-                <Tooltip
-                  labelFormatter={(value) =>
-                    formatTrendTooltipLabel(value, appliedAggregation)
-                  }
-                  isAnimationActive={false}
-                  animationDuration={0}
-                  cursor={trendCursor}
-                  wrapperStyle={trendTooltipWrapper}
-                />
-                <Legend />
-
-                {isAllZoneSelected(selectedZone) ? (
-                  <>
-                    {ACTIVE_ZONES.map((zone) => (
-                      <Line
-                        key={zone}
-                        dataKey={`temp${zone}`}
-                        name={`Zone ${zone}`}
-                        stroke={ZONE_COLORS[zone]}
-                        dot={false}
-                        activeDot={{ r: 3 }}
-                        isAnimationActive={false}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <Line
-                    dataKey="temp"
-                    name={`Zone ${selectedZone}`}
-                    stroke={ZONE_COLORS[selectedZone]}
-                    dot={false}
-                    activeDot={{ r: 3 }}
-                    isAnimationActive={false}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
+                return (
+                  <SensorTrendCard
+                    key={metric}
+                    title={rule.label}
+                    unit={rule.unit}
+                    valueDigits={metric === "co2" ? 0 : 2}
+                    emphasized={
+                      visibleMetrics.length > 1 &&
+                      index === visibleMetrics.length - 1
+                    }
+                    summaries={[
+                      {
+                        id: historicalZone,
+                        label: `Zone ${historicalZone}`,
+                        color: ZONE_COLORS[historicalZone],
+                        ...summary,
+                      },
+                    ]}
+                  >
+                    <div className="h-60">
+                      <ResponsiveContainer
+                        key={`${metric}-${selectedHistoricalCycleKey}-${appliedAggregation}`}
+                        width="100%"
+                        height="100%"
+                      >
+                        <LineChart
+                          data={trendChartData}
+                          margin={{ top: 8, right: 14, bottom: 4, left: 2 }}
+                        >
+                          <CartesianGrid
+                            strokeDasharray="3 3"
+                            stroke="#e2e8f0"
+                          />
+                          <XAxis
+                            dataKey="ts"
+                            type="number"
+                            scale="time"
+                            domain={["dataMin", "dataMax"]}
+                            tickFormatter={(value) =>
+                              formatTrendTick(value, appliedAggregation)
+                            }
+                            minTickGap={55}
+                            tickCount={6}
+                            tick={{ fontSize: 11 }}
+                          />
+                          <YAxis
+                            width={56}
+                            domain={["auto", "auto"]}
+                            tick={{ fontSize: 11 }}
+                          />
+                          <Tooltip
+                            labelFormatter={(value) =>
+                              formatTrendTooltipLabel(
+                                value,
+                                appliedAggregation
+                              )
+                            }
+                            isAnimationActive={false}
+                            animationDuration={0}
+                            cursor={trendCursor}
+                            wrapperStyle={trendTooltipWrapper}
+                          />
+                          <ReferenceLine
+                            y={rule.threshold}
+                            stroke="#f59e0b"
+                            strokeDasharray="5 4"
+                            ifOverflow="extendDomain"
+                            label={{
+                              value: `Limit ${rule.threshold}`,
+                              position: "insideTopRight",
+                              fill: "#b45309",
+                              fontSize: 10,
+                            }}
+                          />
+                          <Line
+                            type="monotone"
+                            dataKey={metric}
+                            name={`Zone ${historicalZone}`}
+                            stroke={SENSOR_METRIC_COLORS[metric]}
+                            strokeWidth={2.25}
+                            dot={
+                              appliedAggregation === "daily" ||
+                              appliedAggregation === "weekly" ||
+                              appliedAggregation === "monthly"
+                                ? { r: 2.5 }
+                                : false
+                            }
+                            activeDot={{ r: 4 }}
+                            connectNulls
+                            isAnimationActive={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </SensorTrendCard>
+                );
+              }
+            )}
           </div>
         )}
-
-        {/* ================= HUMIDITY ================= */}
-        {showParam("humidity") && (
-          <div className="mb-6 bg-white rounded-2xl shadow p-4 h-72">
-            <h3 className="font-semibold">Humidity (%)</h3>
-
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="ts"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(value) =>
-                    formatTrendTick(value, appliedAggregation)
-                  }
-                  minTickGap={55}
-                  tickCount={6}
-                />
-                <YAxis />
-                <Tooltip
-                  labelFormatter={(value) =>
-                    formatTrendTooltipLabel(value, appliedAggregation)
-                  }
-                  isAnimationActive={false}
-                  animationDuration={0}
-                  cursor={trendCursor}
-                  wrapperStyle={trendTooltipWrapper}
-                />
-                <Legend />
-
-                {isAllZoneSelected(selectedZone) ? (
-                  <>
-                    {ACTIVE_ZONES.map((zone) => (
-                      <Line
-                        key={zone}
-                        dataKey={`humidity${zone}`}
-                        name={`Zone ${zone}`}
-                        stroke={ZONE_COLORS[zone]}
-                        dot={false}
-                        activeDot={{ r: 3 }}
-                        isAnimationActive={false}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <Line
-                    dataKey="humidity"
-                    name={`Zone ${selectedZone}`}
-                    stroke={ZONE_COLORS[selectedZone]}
-                    dot={false}
-                    activeDot={{ r: 3 }}
-                    isAnimationActive={false}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-
-        {/* ================= CO₂ ================= */}
-        {showParam("co2") && (
-          <div className="mb-6 bg-white rounded-2xl shadow p-4 h-72">
-            <h3 className="font-semibold">CO₂ (ppm)</h3>
-
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="ts"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(value) =>
-                    formatTrendTick(value, appliedAggregation)
-                  }
-                  minTickGap={55}
-                  tickCount={6}
-                />
-                <YAxis />
-                <Tooltip
-                  labelFormatter={(value) =>
-                    formatTrendTooltipLabel(value, appliedAggregation)
-                  }
-                  isAnimationActive={false}
-                  animationDuration={0}
-                  cursor={trendCursor}
-                  wrapperStyle={trendTooltipWrapper}
-                />
-                <Legend />
-
-                {isAllZoneSelected(selectedZone) ? (
-                  <>
-                    {ACTIVE_ZONES.map((zone) => (
-                      <Line
-                        key={zone}
-                        dataKey={`co2${zone}`}
-                        name={`Zone ${zone}`}
-                        stroke={ZONE_COLORS[zone]}
-                        dot={false}
-                        activeDot={{ r: 3 }}
-                        isAnimationActive={false}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <Line
-                    dataKey="co2"
-                    name={`Zone ${selectedZone}`}
-                    stroke={ZONE_COLORS[selectedZone]}
-                    dot={false}
-                    activeDot={{ r: 3 }}
-                    isAnimationActive={false}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-
-        {/* ================= NH₃ ================= */}
-        {showParam("nh3") && (
-          <div className="mb-6 bg-white rounded-2xl shadow p-4 h-72">
-            <h3 className="font-semibold">NH₃ (ppm)</h3>
-
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="ts"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(value) =>
-                    formatTrendTick(value, appliedAggregation)
-                  }
-                  minTickGap={55}
-                  tickCount={6}
-                />
-                <YAxis />
-                <Tooltip
-                  labelFormatter={(value) =>
-                    formatTrendTooltipLabel(value, appliedAggregation)
-                  }
-                  isAnimationActive={false}
-                  animationDuration={0}
-                  cursor={trendCursor}
-                  wrapperStyle={trendTooltipWrapper}
-                />
-                <Legend />
-
-                {isAllZoneSelected(selectedZone) ? (
-                  <>
-                    {ACTIVE_ZONES.map((zone) => (
-                      <Line
-                        key={zone}
-                        dataKey={`nh3${zone}`}
-                        name={`Zone ${zone}`}
-                        stroke={ZONE_COLORS[zone]}
-                        dot={false}
-                        activeDot={{ r: 3 }}
-                        isAnimationActive={false}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <Line
-                    dataKey="nh3"
-                    name={`Zone ${selectedZone}`}
-                    stroke={ZONE_COLORS[selectedZone]}
-                    dot={false}
-                    activeDot={{ r: 3 }}
-                    isAnimationActive={false}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-
-        {/* ================= PM2.5 ================= */}
-        {showParam("pm25") && (
-          <div className="mb-6 bg-white rounded-2xl shadow p-4 h-72">
-            <h3 className="font-semibold">PM2.5 (µg/m³)</h3>
-
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trendChartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="ts"
-                  type="number"
-                  scale="time"
-                  domain={["dataMin", "dataMax"]}
-                  tickFormatter={(value) =>
-                    formatTrendTick(value, appliedAggregation)
-                  }
-                  minTickGap={55}
-                  tickCount={6}
-                />
-                <YAxis />
-                <Tooltip
-                  labelFormatter={(value) =>
-                    formatTrendTooltipLabel(value, appliedAggregation)
-                  }
-                  isAnimationActive={false}
-                  animationDuration={0}
-                  cursor={trendCursor}
-                  wrapperStyle={trendTooltipWrapper}
-                />
-                <Legend />
-
-                {isAllZoneSelected(selectedZone) ? (
-                  <>
-                    {ACTIVE_ZONES.map((zone) => (
-                      <Line
-                        key={zone}
-                        dataKey={`pm25${zone}`}
-                        name={`Zone ${zone}`}
-                        stroke={ZONE_COLORS[zone]}
-                        dot={false}
-                        activeDot={{ r: 3 }}
-                        isAnimationActive={false}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <Line
-                    dataKey="pm25"
-                    name={`Zone ${selectedZone}`}
-                    stroke={ZONE_COLORS[selectedZone]}
-                    dot={false}
-                    activeDot={{ r: 3 }}
-                    isAnimationActive={false}
-                  />
-                )}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        )}
-          </>
-        )}
+            </div>
       </section>
 
       {/* ======================= Historical Correlation Insight ======================= */}
-      <section className="order-2">
-        <h2 className="text-2xl font-semibold mb-1">
-          Historical Correlation Insight
-        </h2>
-        <p className="mb-4 text-sm text-gray-500">
-          Correlations are calculated from {selectedHistoricalCycle?.label ?? "the selected historical cycle"}.
-        </p>
+      <section className="order-2 overflow-hidden rounded-2xl border border-violet-100 bg-white shadow">
+        <div className="border-b border-violet-100 bg-gradient-to-r from-violet-50 via-fuchsia-50/50 to-white p-5">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
+            Relationship analysis
+          </div>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-950">
+            Historical Correlation Insight
+          </h2>
+          <p className="mt-1 text-sm text-slate-600">
+            Correlations calculated from{" "}
+            {selectedHistoricalCycle?.label ??
+              "the selected historical cycle"}
+            .
+          </p>
+        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-2 2xl:grid-cols-3">
           {/* ================= Temperature vs CO₂ ================= */}
-          <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-medium">Temperature vs CO₂</h3>
-            <p className="text-xs text-gray-500 mb-3">
+          <article className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+            <h3 className="font-semibold text-slate-950">
+              Temperature vs CO₂
+            </h3>
+            <p className="mb-3 text-xs text-slate-500">
               Relationship between temperature and CO₂ concentration
             </p>
 
-            <div className="h-64">
+            <div className="h-60">
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart
                   margin={{ top: 20, right: 20, bottom: 40, left: 20 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <defs>
+                    <linearGradient
+                      id="historical-temp-co2"
+                      x1="0%"
+                      y1="0%"
+                      x2="100%"
+                      y2="100%"
+                    >
+                      <stop
+                        offset="0%"
+                        stopColor={SENSOR_METRIC_COLORS.temp}
+                      />
+                      <stop
+                        offset="100%"
+                        stopColor={SENSOR_METRIC_COLORS.co2}
+                      />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
 
                   <XAxis
                     type="number"
                     dataKey="temp"
                     domain={[20, 40]}
+                    tick={{ fill: SENSOR_METRIC_COLORS.temp }}
                     label={{
                       value: "Temperature (°C)",
                       position: "bottom",
                       offset: 20,
+                      fill: SENSOR_METRIC_COLORS.temp,
                     }}
                   />
 
@@ -2587,11 +2084,13 @@ export default function DashboardPage() {
                     type="number"
                     dataKey="co2"
                     domain={[0, 1500]}
+                    tick={{ fill: SENSOR_METRIC_COLORS.co2 }}
                     label={{
                       value: "CO₂ (ppm)",
                       angle: -90,
                       position: "insideLeft",
                       offset: -10,
+                      fill: SENSOR_METRIC_COLORS.co2,
                     }}
                   />
 
@@ -2601,55 +2100,61 @@ export default function DashboardPage() {
                     <Scatter
                       key={`${s.zone}-co2`}
                       data={s.data}
-                      fill={s.color}
-                      opacity={0.7}
+                      fill="url(#historical-temp-co2)"
+                      opacity={0.8}
                     />
                   ))}
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Legend */}
-            <div className="flex justify-center gap-6 mt-3 text-sm">
-              {(isAllZoneSelected(selectedZone)
-                ? ACTIVE_ZONES
-                : ([selectedZone] as const)
-              ).map((z) => (
-                <span
-                  key={z}
-                  className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
-                >
-                  <span
-                    className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`}
-                  />
-                  {zoneLegendConfig[z].label}
-                </span>
-              ))}
-            </div>
-          </div>
+            <SensorPairLegend metrics={["temp", "co2"]} />
+          </article>
 
           {/* ================= Temperature vs NH₃ ================= */}
-          <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-medium">Temperature vs NH₃</h3>
-            <p className="text-xs text-gray-500 mb-3">
+          <article className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
+            <h3 className="font-semibold text-slate-950">
+              Temperature vs NH₃
+            </h3>
+            <p className="mb-3 text-xs text-slate-500">
               Relationship between temperature and ammonia level
             </p>
 
-            <div className="h-64">
+            <div className="h-60">
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart
                   margin={{ top: 20, right: 20, bottom: 40, left: 20 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <defs>
+                    <linearGradient
+                      id="historical-temp-nh3"
+                      x1="0%"
+                      y1="0%"
+                      x2="100%"
+                      y2="100%"
+                    >
+                      <stop
+                        offset="0%"
+                        stopColor={SENSOR_METRIC_COLORS.temp}
+                      />
+                      <stop
+                        offset="100%"
+                        stopColor={SENSOR_METRIC_COLORS.nh3}
+                      />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
 
                   <XAxis
                     type="number"
                     dataKey="temp"
                     domain={[20, 40]}
+                    tick={{ fill: SENSOR_METRIC_COLORS.temp }}
                     label={{
                       value: "Temperature (°C)",
                       position: "bottom",
                       offset: 20,
+                      fill: SENSOR_METRIC_COLORS.temp,
                     }}
                   />
 
@@ -2657,11 +2162,13 @@ export default function DashboardPage() {
                     type="number"
                     dataKey="nh3"
                     domain={[0, 6]}
+                    tick={{ fill: SENSOR_METRIC_COLORS.nh3 }}
                     label={{
                       value: "NH₃ (ppm)",
                       angle: -90,
                       position: "insideLeft",
                       offset: -10,
+                      fill: SENSOR_METRIC_COLORS.nh3,
                     }}
                   />
 
@@ -2671,55 +2178,61 @@ export default function DashboardPage() {
                     <Scatter
                       key={`${s.zone}-nh3`}
                       data={s.data}
-                      fill={s.color}
-                      opacity={0.7}
+                      fill="url(#historical-temp-nh3)"
+                      opacity={0.8}
                     />
                   ))}
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Legend */}
-            <div className="flex justify-center gap-6 mt-3 text-sm">
-              {(isAllZoneSelected(selectedZone)
-                ? ACTIVE_ZONES
-                : ([selectedZone] as const)
-              ).map((z) => (
-                <span
-                  key={z}
-                  className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
-                >
-                  <span
-                    className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`}
-                  />
-                  {zoneLegendConfig[z].label}
-                </span>
-              ))}
-            </div>
-          </div>
+            <SensorPairLegend metrics={["temp", "nh3"]} />
+          </article>
 
           {/* ================= Humidity vs PM2.5 ================= */}
-          <div className="bg-white rounded-2xl shadow p-4">
-            <h3 className="font-medium">Humidity vs PM2.5</h3>
-            <p className="text-xs text-gray-500 mb-3">
+          <article className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4 lg:col-span-2 2xl:col-span-1">
+            <h3 className="font-semibold text-slate-950">
+              Humidity vs PM2.5
+            </h3>
+            <p className="mb-3 text-xs text-slate-500">
               Relationship between humidity and PM2.5 concentration
             </p>
 
-            <div className="h-64">
+            <div className="h-60">
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart
                   margin={{ top: 20, right: 20, bottom: 40, left: 20 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" />
+                  <defs>
+                    <linearGradient
+                      id="historical-humidity-pm25"
+                      x1="0%"
+                      y1="0%"
+                      x2="100%"
+                      y2="100%"
+                    >
+                      <stop
+                        offset="0%"
+                        stopColor={SENSOR_METRIC_COLORS.humidity}
+                      />
+                      <stop
+                        offset="100%"
+                        stopColor={SENSOR_METRIC_COLORS.pm25}
+                      />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
 
                   <XAxis
                     type="number"
                     dataKey="humidity"
                     domain={[40, 100]}
+                    tick={{ fill: SENSOR_METRIC_COLORS.humidity }}
                     label={{
                       value: "Humidity (%)",
                       position: "bottom",
                       offset: 20,
+                      fill: SENSOR_METRIC_COLORS.humidity,
                     }}
                   />
 
@@ -2727,11 +2240,13 @@ export default function DashboardPage() {
                     type="number"
                     dataKey="pm25"
                     domain={[0, 50]}
+                    tick={{ fill: SENSOR_METRIC_COLORS.pm25 }}
                     label={{
                       value: "PM2.5 (µg/m³)",
                       angle: -90,
                       position: "insideLeft",
                       offset: -10,
+                      fill: SENSOR_METRIC_COLORS.pm25,
                     }}
                   />
 
@@ -2741,32 +2256,16 @@ export default function DashboardPage() {
                     <Scatter
                       key={`${s.zone}-pm25`}
                       data={s.data}
-                      fill={s.color}
-                      opacity={0.7}
+                      fill="url(#historical-humidity-pm25)"
+                      opacity={0.8}
                     />
                   ))}
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
 
-            {/* Legend */}
-            <div className="flex justify-center gap-6 mt-3 text-sm">
-              {(isAllZoneSelected(selectedZone)
-                ? ACTIVE_ZONES
-                : ([selectedZone] as const)
-              ).map((z) => (
-                <span
-                  key={z}
-                  className={`flex items-center gap-2 ${zoneLegendConfig[z].text}`}
-                >
-                  <span
-                    className={`w-3 h-3 rounded-full ${zoneLegendConfig[z].dot}`}
-                  />
-                  {zoneLegendConfig[z].label}
-                </span>
-              ))}
-            </div>
-          </div>
+            <SensorPairLegend metrics={["humidity", "pm25"]} />
+          </article>
         </div>
           </section>
         </>
@@ -2780,11 +2279,18 @@ export default function DashboardPage() {
 
       {selectedZone !== "ALL" && isHistoricalDataOpen && selectedHistoricalCycle && (
         <section className="order-2">
-          <HistoricalCycleAiAnalysis cycle={selectedHistoricalCycle} />
+          <HistoricalCycleAiAnalysis
+            cycle={selectedHistoricalCycle}
+            onReportAnalysisChange={handleHistoricalReportAnalysisChange}
+          />
         </section>
+      )}
+        </>
       )}
 
       {/* ============ Production Monitoring ============ */}
+      {activeTab === "production" && (
+        <>
       {hasStartedCycle ? (
         <section>
         {!isAllZone && cycle.status === "completed" && (
@@ -2804,9 +2310,9 @@ export default function DashboardPage() {
         <ProductionPerformanceCharts
           title="Current Production Performance"
           description={
-            reportZones.length === 1
-              ? `Mortality, feed, water, and body-weight records for Zone ${reportZone} · ${cyclesByZone[reportZone].id}.`
-              : `Each zone uses its own active cycle: ${reportZones
+            productionReportZones.length === 1
+              ? `Mortality, feed, water, and body-weight records for Zone ${productionReportZone} · ${cyclesByZone[productionReportZone].id}.`
+              : `Each zone uses its own active cycle: ${productionReportZones
                   .map(
                     (zone) =>
                       `Zone ${zone} ${cyclesByZone[zone].id} (Day ${harvestSummariesByZone[zone].cycleDay})`
@@ -2814,10 +2320,12 @@ export default function DashboardPage() {
                   .join(" · ")}.`
           }
           periodLabel={
-            reportZones.length === 1
-              ? `${cycle.startDate} – ${
-                  cycle.actualHarvestDate ??
-                  reportDataset.at(-1)?.time.slice(0, 10) ??
+            productionReportZones.length === 1
+              ? `${cyclesByZone[productionReportZone].startDate} – ${
+                  cyclesByZone[productionReportZone].actualHarvestDate ??
+                  reportDatasets[productionReportZone]
+                    .at(-1)
+                    ?.time.slice(0, 10) ??
                   "Current"
                 }`
               : "Independent per-zone cycle periods"
@@ -2853,18 +2361,22 @@ export default function DashboardPage() {
       )}
 
       {hasActiveCycle && (
-        <CurrentCyclePrediction inputs={currentPredictionInputs} />
+        <CurrentCyclePrediction
+          inputs={currentPredictionInputs}
+          onReportAnalysisChange={handleCurrentReportAnalysisChange}
+        />
       )}
+        </>
+      )}
+      </DashboardTabPanel>
+    </DashboardShell>
+  );
+}
 
-      {/* Footer Section */}
-      <footer className="order-3 mt-10 border-t py-6 text-center text-sm text-gray-600">
-        <p className="mb-2">© 2026 UMPSA • MOHE • IMaP. All rights reserved.</p>
-        <p className="mb-4">Contact: kamarul@umpsa.edu.my</p>
-        <p className="text-xs leading-relaxed">
-          Disclaimer: The data and visualizations provided by iSENS-COOP are for research and monitoring purposes only. 
-          Accuracy and reliability of predictions may vary. Users are responsible for interpreting and using the information appropriately.
-        </p>
-      </footer>
-    </div>
+export default function DashboardPage() {
+  return (
+    <DashboardNavigationProvider activeZones={ACTIVE_ZONES}>
+      <DashboardContent />
+    </DashboardNavigationProvider>
   );
 }

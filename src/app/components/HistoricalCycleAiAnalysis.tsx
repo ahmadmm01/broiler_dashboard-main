@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   createFocusedHistoricalAdvice,
   createHistoricalCycleAnalysis,
@@ -11,6 +11,7 @@ import {
   type HistoricalCycleAdvice,
 } from "../lib/historicalCycleAnalysis";
 import type { HistoricalCycle } from "../lib/historicalCycles";
+import type { HistoricalCycleReportAnalysisSnapshot } from "../lib/reportAnalysis";
 
 const riskStyle: Record<HistoricalAnalysisRisk, string> = {
   Low: "border-emerald-200 bg-emerald-50 text-emerald-700",
@@ -20,8 +21,12 @@ const riskStyle: Record<HistoricalAnalysisRisk, string> = {
 
 export default function HistoricalCycleAiAnalysis({
   cycle,
+  onReportAnalysisChange,
 }: {
   cycle: HistoricalCycle;
+  onReportAnalysisChange?: (
+    snapshot: HistoricalCycleReportAnalysisSnapshot
+  ) => void;
 }) {
   const analysis = useMemo(
     () => createHistoricalCycleAnalysis(cycle),
@@ -38,6 +43,8 @@ export default function HistoricalCycleAiAnalysis({
       {
         advice: HistoricalCycleAdvice;
         source: "ai" | "fallback";
+        generatedAt: string;
+        model?: string;
       }
     >
   >({});
@@ -49,6 +56,32 @@ export default function HistoricalCycleAiAnalysis({
   );
   const showAnalysis = Boolean(currentResult);
   const advice = currentResult?.advice ?? fallbackAdvice;
+  const reportAnalysis = useMemo<HistoricalCycleReportAnalysisSnapshot>(
+    () => ({
+      cycleId: cycle.id,
+      questionId: selectedQuestionId,
+      questionLabel: selectedQuestion.label,
+      source: currentResult?.source ?? "local",
+      generatedAt: currentResult?.generatedAt,
+      model: currentResult?.model,
+      riskLevel: analysis.baseline.riskLevel,
+      advice,
+    }),
+    [
+      advice,
+      analysis.baseline.riskLevel,
+      currentResult?.generatedAt,
+      currentResult?.model,
+      currentResult?.source,
+      cycle.id,
+      selectedQuestion.label,
+      selectedQuestionId,
+    ]
+  );
+
+  useEffect(() => {
+    onReportAnalysisChange?.(reportAnalysis);
+  }, [onReportAnalysisChange, reportAnalysis]);
 
   const generateAnalysis = async () => {
     const generatedQuestionId = selectedQuestionId;
@@ -79,6 +112,8 @@ export default function HistoricalCycleAiAnalysis({
         [generatedRequestKey]: {
           advice: json.advice,
           source: "ai",
+          generatedAt: new Date().toISOString(),
+          model: typeof json.model === "string" ? json.model : undefined,
         },
       }));
     } catch {
@@ -87,6 +122,7 @@ export default function HistoricalCycleAiAnalysis({
         [generatedRequestKey]: {
           advice: generatedFallback,
           source: "fallback",
+          generatedAt: new Date().toISOString(),
         },
       }));
     } finally {

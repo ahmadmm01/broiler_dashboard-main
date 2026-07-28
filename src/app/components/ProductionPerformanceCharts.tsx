@@ -503,7 +503,9 @@ export default function ProductionPerformanceCharts({
           <h3 className="font-semibold">Daily Feed & Water per Bird</h3>
           <p className="mb-3 mt-1 text-xs text-slate-500">
             {!hasAnyFeedWaterData
-              ? "Feed and water were not included in the source workbook"
+              ? title.startsWith("Historical")
+                ? "Feed and water were not included in the source workbook"
+                : "Waiting for feed and water records for this cycle"
               : isMultiZone
               ? "Feed and water consumption for each active zone"
               : "Daily consumption recorded for this production cycle"}
@@ -568,7 +570,9 @@ export default function ProductionPerformanceCharts({
                     Data not available
                   </div>
                   <p className="mt-1 text-sm text-slate-500">
-                    No feed or water records were provided for this cycle.
+                    {title.startsWith("Historical")
+                      ? "No feed or water records were provided for this cycle."
+                      : "No feed or water records have been entered for this cycle."}
                   </p>
                 </div>
               </div>

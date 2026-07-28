@@ -246,14 +246,16 @@ export default function ProductionCyclePanel({
               </button>
             </>
           )}
-          {!isDraft && (
+          {isActive && (
             <button
               type="button"
               onClick={onDownload}
               disabled={isDownloading}
               className="flex items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700 disabled:bg-gray-400"
             >
-              {isDownloading ? "Generating report…" : "📄 Download Cycle Report"}
+              {isDownloading
+                ? "Generating current report…"
+                : "📄 Download Current Cycle Report"}
             </button>
           )}
         </div>
@@ -825,10 +827,10 @@ export default function ProductionCyclePanel({
         hours.
       </div>
       <p className="mt-3 text-xs text-gray-500">
-        Pilot growth and feed baseline: Ross 308 AP as-hatched performance
+        Growth and feed reference: Ross 308 AP as-hatched performance
         objectives (2022). Water is estimated at 2.2× feed. Confirm the farm
-        breed, target, and water ratio with the supervisor before audit
-        sign-off.
+        breed, target, and water ratio before using the reference for
+        operational decisions.
       </p>
         </>
       )}

@@ -8,11 +8,13 @@ export default function NotificationCenter({
   soundEnabled,
   onToggleSound,
   onAcknowledge,
+  cycleAlertEpisodeCount,
 }: {
   alerts: AlertEvent[];
   soundEnabled: boolean;
   onToggleSound: () => void;
   onAcknowledge: (id: string) => void;
+  cycleAlertEpisodeCount: number;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const activeCount = alerts.filter((alert) => alert.status === "active").length;
@@ -23,22 +25,39 @@ export default function NotificationCenter({
       <button
         type="button"
         onClick={() => setIsOpen((open) => !open)}
-        className="w-full md:w-auto border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-950 px-4 py-2 rounded-lg font-semibold flex items-center justify-center gap-2"
+        className={`flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-2 font-semibold md:w-auto ${
+          activeCount > 0
+            ? "border-amber-200 bg-amber-50 text-amber-950 hover:bg-amber-100"
+            : "border-emerald-200 bg-emerald-50 text-emerald-950 hover:bg-emerald-100"
+        }`}
         aria-expanded={isOpen}
+        aria-controls="notification-center-panel"
+        aria-label={`${activeCount} active sensor alert${activeCount === 1 ? "" : "s"}. ${cycleAlertEpisodeCount} threshold alert episode${cycleAlertEpisodeCount === 1 ? "" : "s"} recorded during the selected cycle scope.`}
       >
         <span aria-hidden>🔔</span>
-        Alerts
-        <span className="min-w-6 h-6 px-1.5 rounded-full bg-red-600 text-white text-xs grid place-items-center">
+        Active alerts
+        <span
+          className={`grid h-6 min-w-6 place-items-center rounded-full px-1.5 text-xs text-white ${
+            activeCount > 0 ? "bg-red-600" : "bg-emerald-600"
+          }`}
+        >
           {activeCount}
         </span>
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-[min(92vw,430px)] bg-white border border-gray-200 rounded-2xl shadow-2xl p-4 z-[70]">
+        <div
+          id="notification-center-panel"
+          className="absolute right-0 z-[70] mt-2 w-[min(92vw,430px)] rounded-2xl border border-gray-200 bg-white p-4 shadow-2xl"
+        >
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
               <h3 className="font-semibold">Notification Center</h3>
-              <p className="text-xs text-gray-500">Threshold crossings and resolved events</p>
+              <p className="text-xs text-gray-500">
+                {activeCount} active now · {cycleAlertEpisodeCount} threshold{" "}
+                {cycleAlertEpisodeCount === 1 ? "episode" : "episodes"} in the
+                selected cycle scope
+              </p>
             </div>
             <button
               type="button"
@@ -52,7 +71,9 @@ export default function NotificationCenter({
           <div className="max-h-80 overflow-auto space-y-2">
             {recentAlerts.length === 0 ? (
               <div className="p-4 rounded-xl bg-green-50 text-green-800 text-sm">
-                No alert events have been recorded.
+                {cycleAlertEpisodeCount > 0
+                  ? `No active or persisted notifications are in this timeline. Cycle analysis detected ${cycleAlertEpisodeCount} threshold episodes from the stored sensor history.`
+                  : "No active alerts or cycle threshold episodes have been recorded."}
               </div>
             ) : (
               recentAlerts.map((alert) => (

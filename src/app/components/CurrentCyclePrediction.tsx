@@ -8,6 +8,7 @@ import {
   type CyclePredictionBaseline,
   type PredictionRiskLevel,
 } from "../lib/cyclePrediction";
+import type { CurrentCycleReportAnalysisSnapshot } from "../lib/reportAnalysis";
 import type { DataPoint, ProductionCycle, Zone } from "../lib/types";
 
 const integer = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
@@ -78,7 +79,7 @@ function combineZoneAdvice(
   return {
     summary: `The current-cycle comparison covers Zones ${predictions
       .map(({ zone }) => zone)
-      .join(", ")}. The highest current operational risk across the active zones is ${overallRisk.toLowerCase()}. Review each zone condition before applying any house-wide action.`,
+      .join(", ")}. The highest current cycle risk across the active zones is ${overallRisk.toLowerCase()}. Review each zone condition before applying any house-wide action.`,
     zoneSummaries: predictions.map(({ zone, riskLevel, baseline }) => ({
       zone,
       riskLevel,
@@ -102,8 +103,12 @@ function formatHarvestTiming(
 
 export default function CurrentCyclePrediction({
   inputs,
+  onReportAnalysisChange,
 }: {
   inputs: CurrentCyclePredictionInput[];
+  onReportAnalysisChange?: (
+    snapshot: CurrentCycleReportAnalysisSnapshot
+  ) => void;
 }) {
   const predictions = useMemo(
     () =>
@@ -129,6 +134,14 @@ export default function CurrentCyclePrediction({
         : highest,
     "Low"
   );
+  const overallRiskDrivers = predictions
+    .filter((prediction) => prediction.baseline.riskLevel === overallRisk)
+    .flatMap((prediction) =>
+      prediction.baseline.riskDrivers.map((driver) =>
+        isMultiZone ? `Zone ${prediction.zone}: ${driver}` : driver
+      )
+    )
+    .slice(0, 3);
   const baselineSignature = JSON.stringify(baselines);
   const contextSignature = predictions
     .map(
@@ -147,19 +160,25 @@ export default function CurrentCyclePrediction({
       (input) => input.sensorData.length > 0
     ) &&
     baselines.every((baseline) => baseline.latestReading !== "-");
-  const fallbackAdvice = combineZoneAdvice(
-    predictions.map(({ zone, baseline, fallbackAdvice }) => ({
-      zone,
-      riskLevel: baseline.riskLevel,
-      baseline,
-      fallbackAdvice,
-    })),
-    overallRisk
+  const fallbackAdvice = useMemo(
+    () =>
+      combineZoneAdvice(
+        predictions.map(({ zone, baseline, fallbackAdvice }) => ({
+          zone,
+          riskLevel: baseline.riskLevel,
+          baseline,
+          fallbackAdvice,
+        })),
+        overallRisk
+      ),
+    [overallRisk, predictions]
   );
   const [aiResults, setAiResults] = useState<Record<string, {
     contextSignature: string;
     baselineSignature: string;
     latestReading: string;
+    generatedAt: string;
+    model?: string;
     advice: CyclePredictionAdvice;
   }>>({});
   const [generatingContext, setGeneratingContext] = useState<string | null>(
@@ -189,6 +208,41 @@ export default function CurrentCyclePrediction({
   const recommendationsDataThrough = hasCurrentAiResult
     ? aiResult!.latestReading
     : latestReading;
+  const reportAnalysis = useMemo<CurrentCycleReportAnalysisSnapshot>(
+    () => ({
+      contextSignature,
+      cycleIds: predictions.map(({ cycle }) => cycle.id),
+      zones: predictions.map(({ zone }) => zone),
+      source: hasCurrentAiResult
+        ? "ai"
+        : hasRequestedAi && aiUnavailable
+          ? "fallback"
+          : "local",
+      generatedAt: aiResult?.generatedAt,
+      dataThrough: recommendationsDataThrough,
+      model: aiResult?.model,
+      riskLevel: overallRisk,
+      stale: hasNewSensorData,
+      advice,
+    }),
+    [
+      advice,
+      aiResult?.generatedAt,
+      aiResult?.model,
+      aiUnavailable,
+      contextSignature,
+      hasCurrentAiResult,
+      hasNewSensorData,
+      hasRequestedAi,
+      overallRisk,
+      predictions,
+      recommendationsDataThrough,
+    ]
+  );
+
+  useEffect(() => {
+    onReportAnalysisChange?.(reportAnalysis);
+  }, [onReportAnalysisChange, reportAnalysis]);
 
   const generateAiRecommendations = useCallback(async () => {
     setRequestedContexts((current) => ({
@@ -221,6 +275,8 @@ export default function CurrentCyclePrediction({
           contextSignature,
           baselineSignature,
           latestReading,
+          generatedAt: new Date().toISOString(),
+          model: typeof json.model === "string" ? json.model : undefined,
           advice: json.advice,
         },
       }));
@@ -278,15 +334,32 @@ export default function CurrentCyclePrediction({
                   : "Current Cycle Prediction"}
               </h2>
               <span
-                className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[overallRisk]}`}
+                className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+                  hasReadyZoneData
+                    ? riskStyle[overallRisk]
+                    : "border-slate-200 bg-slate-50 text-slate-600"
+                }`}
               >
-                {isMultiZone ? "Highest: " : ""}{overallRisk} operational risk
+                {hasReadyZoneData
+                  ? `${isMultiZone ? "Highest cycle risk: " : "Cycle risk: "}${overallRisk}`
+                  : "Cycle risk: Calculating"}
               </span>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
               {isMultiZone
                 ? "Automatic current-condition summary for every active zone. Forecasting is available after selecting one zone."
                 : "Forecast of the configured harvest outcome if the current production and environmental trend continues."}
+            </p>
+            <p className="mt-2 max-w-4xl text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">
+                Cycle-risk drivers:
+              </span>{" "}
+              {!hasReadyZoneData
+                ? "Waiting for the current-cycle sensor snapshot"
+                : overallRiskDrivers.length > 0
+                ? overallRiskDrivers.join(" · ")
+                : "No major configured risk driver detected"}
+              . Active sensor alerts are reported separately in the toolbar.
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               <span className="rounded-full border border-indigo-100 bg-white px-2.5 py-1 text-indigo-700">
@@ -390,11 +463,16 @@ export default function CurrentCyclePrediction({
                   <span
                     className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${riskStyle[zoneBaseline.riskLevel]}`}
                   >
-                    {zoneBaseline.riskLevel} risk
+                    Cycle risk: {zoneBaseline.riskLevel}
                   </span>
                 </div>
                 <div className="mb-3 text-xs text-slate-500">
                   {zoneBaseline.cycleId} · Day {zoneBaseline.currentDay} of {zoneBaseline.targetHarvestDay}
+                </div>
+                <div className="mb-3 text-xs leading-5 text-slate-600">
+                  <span className="font-semibold">Drivers:</span>{" "}
+                  {zoneBaseline.riskDrivers.slice(0, 2).join(" · ") ||
+                    "No major configured driver"}
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
                   {[

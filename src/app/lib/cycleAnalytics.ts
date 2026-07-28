@@ -78,6 +78,36 @@ export function createDraftProductionCycles(): Record<Zone, ProductionCycle> {
   ) as unknown as Record<Zone, ProductionCycle>;
 }
 
+export function createInitialProductionCycles(): Record<
+  Zone,
+  ProductionCycle
+> {
+  const cycles = createDraftProductionCycles();
+  const startDate = formatDate(addDays(new Date(), -9));
+  const startedAt = `${startDate}T00:00:00.000Z`;
+
+  cycles.A = {
+    ...cycles.A,
+    id: `CYCLE-A-${startDate.replaceAll("-", "")}`,
+    startDate,
+    notes: "",
+    status: "active",
+    createdAt: startedAt,
+    updatedAt: startedAt,
+    revision: 1,
+    auditLog: [
+      {
+        id: `started-A-${startedAt}`,
+        type: "started",
+        timestamp: startedAt,
+        reason: "Production cycle started for Zone A.",
+      },
+    ],
+  };
+
+  return cycles;
+}
+
 export function createDemoProductionCycles(): Record<Zone, ProductionCycle> {
   const windowStart = getDemoWindowStart();
 

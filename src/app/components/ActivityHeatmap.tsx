@@ -28,11 +28,11 @@ export default function ActivityHeatmap({
         <div>
           <h3 className="font-semibold text-lg">Activity Density Preview</h3>
           <p className="text-xs text-gray-500">
-            Moving replay overlay aligned with the current sensor cursor
+            Moving density overlay aligned with the current sensor timestamp
           </p>
         </div>
         <span className="self-start text-xs px-2.5 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200">
-          Simulated overlay · CV metadata pending
+          Activity visualization · CV metadata pending
         </span>
       </div>
 

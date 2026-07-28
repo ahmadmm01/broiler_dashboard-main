@@ -6,6 +6,29 @@ import type { DataPoint, ProductionCycle, Zone } from "./types";
 export type PredictionRiskLevel = "Low" | "Moderate" | "High";
 export type PredictionConfidence = "Low" | "Medium" | "High";
 
+export type CycleRiskFactor = {
+  key:
+    | "mortality"
+    | "weight"
+    | "fcr"
+    | "temperature"
+    | "co2"
+    | "nh3"
+    | "pm25"
+    | "alert-episodes"
+    | "sensor-completeness";
+  label: string;
+  detail: string;
+  score: number;
+};
+
+export type CycleRiskAssessment = {
+  level: PredictionRiskLevel;
+  score: number;
+  factors: CycleRiskFactor[];
+  summary: string;
+};
+
 export type CyclePredictionBaseline = {
   cycleId: string;
   houseName: string;
@@ -22,6 +45,8 @@ export type CyclePredictionBaseline = {
   weightVariancePercent: number;
   alertCount: number;
   riskLevel: PredictionRiskLevel;
+  riskScore: number;
+  riskDrivers: string[];
   confidence: PredictionConfidence;
   sensorCompleteness: number;
   latestReading: string;
@@ -66,6 +91,147 @@ export type CurrentCyclePrediction = {
 const round = (value: number, decimals = 2) =>
   Number(value.toFixed(decimals));
 
+export function assessCurrentCycleRisk({
+  harvest,
+  sensorData,
+  sensorSummary,
+}: {
+  harvest: HarvestSummary;
+  sensorData?: DataPoint[];
+  sensorSummary?: ReturnType<typeof summarizeData>;
+}): CycleRiskAssessment {
+  const sensor = sensorSummary ?? summarizeData(sensorData ?? []);
+  const temperaturePeak = sensor?.temp.max ?? 0;
+  const co2Peak = sensor?.co2.max ?? 0;
+  const nh3Peak = sensor?.nh3.max ?? 0;
+  const pm25Peak = sensor?.pm25.max ?? 0;
+  const factors: CycleRiskFactor[] = [];
+
+  if (harvest.mortalityRate > 3) {
+    factors.push({
+      key: "mortality",
+      label: "Mortality trend",
+      detail: `${harvest.mortalityRate.toFixed(2)}% mortality`,
+      score: 3,
+    });
+  } else if (harvest.mortalityRate > 1.5) {
+    factors.push({
+      key: "mortality",
+      label: "Mortality trend",
+      detail: `${harvest.mortalityRate.toFixed(2)}% mortality`,
+      score: 1,
+    });
+  }
+
+  if (harvest.weightVariancePercent < -8) {
+    factors.push({
+      key: "weight",
+      label: "Weight gap",
+      detail: `${Math.abs(harvest.weightVariancePercent).toFixed(2)}% below weight standard`,
+      score: 3,
+    });
+  } else if (harvest.weightVariancePercent < -3) {
+    factors.push({
+      key: "weight",
+      label: "Weight gap",
+      detail: `${Math.abs(harvest.weightVariancePercent).toFixed(2)}% below weight standard`,
+      score: 1,
+    });
+  }
+
+  if (harvest.fcr > 1.9) {
+    factors.push({
+      key: "fcr",
+      label: "Feed efficiency",
+      detail: `FCR ${harvest.fcr.toFixed(2)} above 1.90`,
+      score: 2,
+    });
+  } else if (harvest.fcr > 1.7) {
+    factors.push({
+      key: "fcr",
+      label: "Feed efficiency",
+      detail: `FCR ${harvest.fcr.toFixed(2)} above 1.70`,
+      score: 1,
+    });
+  }
+
+  if (temperaturePeak > 32) {
+    factors.push({
+      key: "temperature",
+      label: "Heat exposure",
+      detail: `${temperaturePeak.toFixed(2)} °C temperature peak`,
+      score: 1,
+    });
+  }
+  if (co2Peak > 1200) {
+    factors.push({
+      key: "co2",
+      label: "CO₂ peak",
+      detail: `${co2Peak.toFixed(0)} ppm CO₂ peak`,
+      score: 1,
+    });
+  }
+  if (nh3Peak > 5) {
+    factors.push({
+      key: "nh3",
+      label: "NH₃ peak",
+      detail: `${nh3Peak.toFixed(2)} ppm NH₃ peak`,
+      score: 1,
+    });
+  }
+  if (pm25Peak > 35) {
+    factors.push({
+      key: "pm25",
+      label: "PM2.5 peak",
+      detail: `${pm25Peak.toFixed(2)} µg/m³ PM2.5 peak`,
+      score: 1,
+    });
+  }
+
+  if (harvest.alertCount >= 8) {
+    factors.push({
+      key: "alert-episodes",
+      label: `${harvest.alertCount} alert episodes`,
+      detail: `${harvest.alertCount} threshold alert episodes during the cycle`,
+      score: 2,
+    });
+  } else if (harvest.alertCount >= 3) {
+    factors.push({
+      key: "alert-episodes",
+      label: `${harvest.alertCount} alert episodes`,
+      detail: `${harvest.alertCount} threshold alert episodes during the cycle`,
+      score: 1,
+    });
+  }
+
+  if (harvest.sensorHealth.completeness < 90) {
+    factors.push({
+      key: "sensor-completeness",
+      label: "Sensor data gap",
+      detail: `${harvest.sensorHealth.completeness.toFixed(1)}% sensor completeness`,
+      score: 2,
+    });
+  }
+
+  factors.sort((left, right) => right.score - left.score);
+  const score = factors.reduce((total, factor) => total + factor.score, 0);
+  const level: PredictionRiskLevel =
+    score >= 5 ? "High" : score >= 2 ? "Moderate" : "Low";
+
+  return {
+    level,
+    score,
+    factors,
+    summary:
+      factors.length > 0
+        ? factors
+            .slice(0, 3)
+            .map((factor) => factor.detail)
+            .join(" · ")
+        : "No major cycle-risk driver is outside the configured review limits",
+  };
+}
+
 export function createCurrentCyclePrediction({
   cycle,
   harvest,
@@ -81,11 +247,17 @@ export function createCurrentCyclePrediction({
   const currentDay = Math.max(1, harvest.cycleDay);
   const daysRemaining = Math.max(0, cycle.targetHarvestDay - currentDay);
   const measuredWeight = harvest.finalAverageWeightKg;
-  const currentWeight =
-    measuredWeight > 0 ? measuredWeight : standardBroilerWeight(currentDay);
+  const currentStandardWeightKg = standardBroilerWeight(currentDay);
+  const targetAverageWeightKg = standardBroilerWeight(
+    cycle.targetHarvestDay
+  );
+  const growthPerformanceRatio =
+    measuredWeight > 0 && currentStandardWeightKg > 0
+      ? measuredWeight / currentStandardWeightKg
+      : 1;
   const projectedAverageWeightKg = Math.max(
     0,
-    currentWeight + (harvest.averageDailyGainGram * daysRemaining) / 1000
+    targetAverageWeightKg * growthPerformanceRatio
   );
   const projectedMortality = Math.round(
     (harvest.totalMortality / currentDay) * daysRemaining
@@ -94,35 +266,15 @@ export function createCurrentCyclePrediction({
     0,
     harvest.survivingBirds - projectedMortality
   );
-  const targetAverageWeightKg = standardBroilerWeight(
-    cycle.targetHarvestDay
-  );
-
   const temperaturePeak = sensor?.temp.max ?? 0;
   const co2Peak = sensor?.co2.max ?? 0;
   const nh3Peak = sensor?.nh3.max ?? 0;
   const pm25Peak = sensor?.pm25.max ?? 0;
-  let riskScore = 0;
-
-  if (harvest.mortalityRate > 3) riskScore += 3;
-  else if (harvest.mortalityRate > 1.5) riskScore += 1;
-
-  if (harvest.weightVariancePercent < -8) riskScore += 3;
-  else if (harvest.weightVariancePercent < -3) riskScore += 1;
-
-  if (harvest.fcr > 1.9) riskScore += 2;
-  else if (harvest.fcr > 1.7) riskScore += 1;
-
-  if (temperaturePeak > 32) riskScore += 1;
-  if (co2Peak > 1200) riskScore += 1;
-  if (nh3Peak > 5) riskScore += 1;
-  if (pm25Peak > 35) riskScore += 1;
-  if (harvest.alertCount >= 8) riskScore += 2;
-  else if (harvest.alertCount >= 3) riskScore += 1;
-  if (harvest.sensorHealth.completeness < 90) riskScore += 2;
-
-  const riskLevel: PredictionRiskLevel =
-    riskScore >= 5 ? "High" : riskScore >= 2 ? "Moderate" : "Low";
+  const riskAssessment = assessCurrentCycleRisk({
+    harvest,
+    sensorSummary: sensor,
+  });
+  const riskLevel = riskAssessment.level;
   const confidence: PredictionConfidence =
     harvest.sensorHealth.completeness >= 95 &&
     measuredWeight > 0 &&
@@ -150,6 +302,8 @@ export function createCurrentCyclePrediction({
     weightVariancePercent: round(harvest.weightVariancePercent),
     alertCount: harvest.alertCount,
     riskLevel,
+    riskScore: riskAssessment.score,
+    riskDrivers: riskAssessment.factors.map((factor) => factor.detail),
     confidence,
     sensorCompleteness: round(harvest.sensorHealth.completeness, 1),
     latestReading: sensorData.at(-1)?.time ?? "-",
@@ -299,7 +453,7 @@ export function createCurrentCyclePrediction({
   return {
     baseline,
     fallbackAdvice: {
-      summary: `${stageText} If the recorded trend continues, average weight is projected at ${baseline.projectedAverageWeightKg.toFixed(3)} kg per bird with approximately ${baseline.projectedSurvivingBirds.toLocaleString()} birds remaining. Overall operational risk is ${riskLevel.toLowerCase()}.`,
+      summary: `${stageText} If the recorded trend continues, average weight is projected at ${baseline.projectedAverageWeightKg.toFixed(3)} kg per bird with approximately ${baseline.projectedSurvivingBirds.toLocaleString()} birds remaining. Overall cycle risk is ${riskLevel.toLowerCase()}, driven by ${riskAssessment.summary}.`,
       zoneSummaries: [
         {
           zone,

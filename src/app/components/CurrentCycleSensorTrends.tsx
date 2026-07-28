@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { SENSOR_ALERT_RULES } from "../lib/alertRules";
 import { dateToDayNumber } from "../lib/dateUtils";
+import SensorTrendCard from "./SensorTrendCard";
 import type {
   DataPoint,
   ProductionCycle,
@@ -257,7 +258,7 @@ export default function CurrentCycleSensorTrends({
               {!hasActiveCycle
                 ? "Sensor monitoring remains available before a production cycle starts."
                 : series.length === 1
-                ? `One-minute environmental replay from ${series[0].cycle.startDate} onward for ${zoneLabel}.`
+                ? `One-minute environmental readings from ${series[0].cycle.startDate} onward for ${zoneLabel}.`
                 : "Each zone is filtered from its own active-cycle start date, so zones at different flock ages remain comparable without mixing their timelines."}{" "}
               Live mode follows the latest six-hour rolling window for every
               displayed zone.
@@ -331,7 +332,7 @@ export default function CurrentCycleSensorTrends({
             Waiting for sensor readings
           </h3>
           <p className="mt-2 text-sm text-slate-500">
-            Environmental readings will appear when the sensor replay is
+            Environmental readings will appear when the sensor connection is
             available.
           </p>
         </div>
@@ -340,64 +341,19 @@ export default function CurrentCycleSensorTrends({
           {metricOrder.map((metric, index) => {
             const rule = SENSOR_ALERT_RULES[metric];
             return (
-              <article
+              <SensorTrendCard
                 key={metric}
-                className={`rounded-2xl border border-slate-200 bg-slate-50/60 p-4 ${
-                  index === metricOrder.length - 1
-                    ? "lg:col-span-2 2xl:col-span-2"
-                    : ""
-                }`}
+                title={rule.label}
+                unit={rule.unit}
+                valueDigits={metric === "co2" ? 0 : 2}
+                emphasized={index === metricOrder.length - 1}
+                summaries={preparedSeries.map(({ zone, summaries }) => ({
+                  id: zone,
+                  label: `Zone ${zone}`,
+                  color: zoneColors[zone],
+                  ...summaries[metric],
+                }))}
               >
-                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h3 className="font-semibold text-slate-950">
-                      {rule.label} ({rule.unit})
-                    </h3>
-                  </div>
-                </div>
-                <div
-                  className={`mb-4 grid gap-2 ${
-                    preparedSeries.length > 1
-                      ? "sm:grid-cols-3"
-                      : "grid-cols-1"
-                  }`}
-                >
-                  {preparedSeries.map(({ zone, summaries }) => {
-                    const summary = summaries[metric];
-                    return (
-                      <div
-                        key={zone}
-                        className="rounded-xl border border-slate-200 bg-white p-3"
-                        style={{ borderLeftColor: zoneColors[zone], borderLeftWidth: 4 }}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-semibold text-slate-600">
-                            Zone {zone}
-                          </span>
-                          <span className="font-semibold text-slate-950">
-                            {summary.latest.toFixed(metric === "co2" ? 0 : 2)}{" "}
-                            {rule.unit}
-                          </span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-slate-500">
-                          Avg {summary.average.toFixed(2)} · Range{" "}
-                          {summary.minimum.toFixed(2)}–{summary.maximum.toFixed(2)}
-                        </div>
-                        <div
-                          className={`mt-1 text-[11px] ${
-                            summary.exceedances
-                              ? "font-semibold text-amber-700"
-                              : "text-emerald-700"
-                          }`}
-                        >
-                          {summary.exceedances
-                            ? `${summary.exceedances} readings above limit`
-                            : "No reading above limit"}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
                 <div className="h-60">
                   <ResponsiveContainer
                     key={`${metric}-${seriesSignature}-${aggregation}`}
@@ -454,7 +410,7 @@ export default function CurrentCycleSensorTrends({
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
-              </article>
+              </SensorTrendCard>
             );
           })}
         </div>

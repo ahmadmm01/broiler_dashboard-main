@@ -180,6 +180,8 @@ export async function POST(request: Request) {
           fcr: baseline.fcr,
           alertCount: baseline.alertCount,
           riskLevel: baseline.riskLevel,
+          riskScore: baseline.riskScore,
+          riskDrivers: baseline.riskDrivers,
           sensorCompleteness: baseline.sensorCompleteness,
           latestReading: baseline.latestReading,
           sensor: baseline.sensor,
