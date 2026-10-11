@@ -25,6 +25,8 @@ export default function ProductionCyclePanel({
   onReopen,
   onDownload,
   isDownloading,
+  readOnly = false,
+  replay = false,
 }: {
   cycle: ProductionCycle;
   summary: HarvestSummary;
@@ -35,6 +37,8 @@ export default function ProductionCyclePanel({
   onReopen: (reason: string) => void;
   onDownload: () => void;
   isDownloading: boolean;
+  readOnly?: boolean;
+  replay?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
@@ -162,14 +166,22 @@ export default function ProductionCyclePanel({
             </h2>
             <span
               className={`rounded-full border px-2.5 py-1 text-xs ${
-                isDraft
+                replay
+                  ? "border-violet-300 bg-violet-100 text-violet-800"
+                  : readOnly
+                  ? "border-slate-300 bg-slate-100 text-slate-700"
+                  : isDraft
                   ? "border-slate-200 bg-slate-100 text-slate-700"
                   : isCompleted
                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                   : "border-blue-200 bg-blue-50 text-blue-700"
               }`}
             >
-              {isDraft
+              {replay
+                ? `Replay active · Day ${summary.cycleDay} of ${cycle.targetHarvestDay}`
+                : readOnly
+                ? "Not running"
+                : isDraft
                 ? "Not started"
                 : isCompleted
                 ? "Completed · Historical snapshot created"
@@ -179,12 +191,24 @@ export default function ProductionCyclePanel({
             </span>
           </div>
           <p className="mt-1 text-sm text-gray-500">
-            Start, maintain, complete, and audit one production cycle without
-            mixing its records with another flock.
+            {replay
+              ? "Cycle status and production records advance with the shared dashboard replay. Lifecycle actions are locked because this is stored data."
+              : readOnly
+              ? "Production data remains available for review. Cycle actions are disabled while monitoring is inactive."
+              : "Start, maintain, complete, and audit one production cycle without mixing its records with another flock."}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          {isDraft && !isStarting && (
+          {readOnly && (
+            <button
+              type="button"
+              disabled
+              className="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 font-semibold text-slate-500"
+            >
+              {replay ? "Replay Data · Actions Locked" : "Cycle Unavailable"}
+            </button>
+          )}
+          {!readOnly && isDraft && !isStarting && (
             <button
               type="button"
               onClick={openStartCycle}
@@ -193,7 +217,7 @@ export default function ProductionCyclePanel({
               + Start Cycle
             </button>
           )}
-          {isActive &&
+          {!readOnly && isActive &&
             !isEditing &&
             !isStarting &&
             !isCompleting && (
@@ -205,7 +229,7 @@ export default function ProductionCyclePanel({
               ✏️ Edit Cycle Data
             </button>
           )}
-          {isActive && !isCompleting && !isStarting && (
+          {!readOnly && isActive && !isCompleting && !isStarting && (
             <button
               type="button"
               onClick={onReset}
@@ -214,7 +238,7 @@ export default function ProductionCyclePanel({
               ↺ Reset Cycle
             </button>
           )}
-          {isActive && !isCompleting && !isStarting && (
+          {!readOnly && isActive && !isCompleting && !isStarting && (
             <button
               type="button"
               onClick={openCompletion}
@@ -223,7 +247,7 @@ export default function ProductionCyclePanel({
               ✓ Complete Cycle
             </button>
           )}
-          {isCompleted && !isStarting && !isReopening && (
+          {!readOnly && isCompleted && !isStarting && !isReopening && (
             <>
               <button
                 type="button"
@@ -267,7 +291,14 @@ export default function ProductionCyclePanel({
           ["House / zone", `${cycle.houseName} · Zone ${cycle.zone}`],
           ["Start date", isDraft ? "Not started" : cycle.startDate],
           ["Ideal cycle length", `${cycle.targetHarvestDay} days`],
-          ["Lifecycle status", cycle.status.toUpperCase()],
+          [
+            "Lifecycle status",
+            replay
+              ? "REPLAY ACTIVE"
+              : readOnly
+                ? "NOT RUNNING"
+                : cycle.status.toUpperCase(),
+          ],
           ["Revision", isDraft ? "—" : `#${cycle.revision}`],
         ].map(([label, value]) => (
           <div key={label}>
@@ -279,7 +310,20 @@ export default function ProductionCyclePanel({
         ))}
       </div>
 
-      {isDraft ? (
+      {readOnly && !replay ? (
+        <div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Cycle progress
+          </div>
+          <div className="mt-1 text-xl font-semibold text-slate-950">
+            Cycle is not running
+          </div>
+          <p className="mt-1 max-w-3xl text-sm text-slate-600">
+            Cycle-day progress is inactive while production monitoring is not
+            running. The records below remain available for reference.
+          </p>
+        </div>
+      ) : isDraft ? (
         <div className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-5">
           <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
             Cycle status
@@ -298,7 +342,11 @@ export default function ProductionCyclePanel({
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">
-                Current cycle progress
+                {replay
+                  ? "Replay cycle progress"
+                  : readOnly
+                    ? "Last recorded cycle progress"
+                    : "Current cycle progress"}
               </div>
               <div className="mt-1 text-xl font-semibold text-slate-950">
                 Day {summary.cycleDay} of the ideal {cycle.targetHarvestDay}-day
@@ -815,16 +863,24 @@ export default function ProductionCyclePanel({
 
       <div
         className={`mt-4 rounded-xl border p-3 text-sm ${
-          summary.sensorHealth.status === "Healthy"
+          readOnly
+            ? "border-slate-200 bg-slate-100 text-slate-700"
+            : summary.sensorHealth.status === "Healthy"
             ? "border-green-200 bg-green-50 text-green-900"
             : "border-amber-200 bg-amber-50 text-amber-900"
         }`}
       >
-        <strong>Sensor health: {summary.sensorHealth.status}.</strong>{" "}
-        {summary.sensorHealth.receivedRecords} of{" "}
-        {summary.sensorHealth.expectedRecords} expected records received;
-        largest sampling gap {summary.sensorHealth.largestGapHours.toFixed(1)}
-        hours.
+        {readOnly ? (
+          <strong>Sensor monitoring: Inactive.</strong>
+        ) : (
+          <>
+            <strong>Sensor health: {summary.sensorHealth.status}.</strong>{" "}
+            {summary.sensorHealth.receivedRecords} of{" "}
+            {summary.sensorHealth.expectedRecords} expected records received;
+            largest sampling gap {summary.sensorHealth.largestGapHours.toFixed(1)}
+            hours.
+          </>
+        )}
       </div>
       <p className="mt-3 text-xs text-gray-500">
         Growth and feed reference: Ross 308 AP as-hatched performance

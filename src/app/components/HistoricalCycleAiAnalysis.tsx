@@ -28,6 +28,7 @@ export default function HistoricalCycleAiAnalysis({
     snapshot: HistoricalCycleReportAnalysisSnapshot
   ) => void;
 }) {
+  const hasSensorData = cycle.data.length > 0;
   const analysis = useMemo(
     () => createHistoricalCycleAnalysis(cycle),
     [cycle]
@@ -215,48 +216,57 @@ export default function HistoricalCycleAiAnalysis({
           </div>
         )}
 
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-          {analysis.baseline.metrics.map((metric) => (
-            <div
-              key={metric.key}
-              className="rounded-xl border border-slate-200 bg-slate-50 p-3"
-            >
-              <div className="text-xs text-slate-500">
-                Avg {metric.label}
-              </div>
-              <div className="mt-1 font-semibold text-slate-950">
-                {metric.average.toFixed(metric.key === "co2" ? 0 : 2)}{" "}
-                {metric.unit}
-              </div>
-              <div className="mt-1 text-[11px] leading-4 text-slate-500">
-                Range {metric.minimum.toFixed(metric.key === "co2" ? 0 : 2)}–
-                {metric.maximum.toFixed(metric.key === "co2" ? 0 : 2)}{" "}
-                {metric.unit}
-              </div>
-              <div
-                className={`mt-2 text-xs font-medium ${
-                  metric.exceedanceCount > 0
-                    ? "text-amber-700"
-                    : "text-emerald-700"
-                }`}
-              >
-                {metric.exceedanceCount > 0
-                  ? `${metric.exceedanceCount} outside limit (${metric.exceedancePercent.toFixed(1)}%)`
-                  : "No exceedance"}
-              </div>
+        {hasSensorData ? (
+          <>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+              {analysis.baseline.metrics.map((metric) => (
+                <div
+                  key={metric.key}
+                  className="rounded-xl border border-slate-200 bg-slate-50 p-3"
+                >
+                  <div className="text-xs text-slate-500">
+                    Avg {metric.label}
+                  </div>
+                  <div className="mt-1 font-semibold text-slate-950">
+                    {metric.average.toFixed(metric.key === "co2" ? 0 : 2)}{" "}
+                    {metric.unit}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-4 text-slate-500">
+                    Range {metric.minimum.toFixed(metric.key === "co2" ? 0 : 2)}–
+                    {metric.maximum.toFixed(metric.key === "co2" ? 0 : 2)}{" "}
+                    {metric.unit}
+                  </div>
+                  <div
+                    className={`mt-2 text-xs font-medium ${
+                      metric.exceedanceCount > 0
+                        ? "text-amber-700"
+                        : "text-emerald-700"
+                    }`}
+                  >
+                    {metric.exceedanceCount > 0
+                      ? `${metric.exceedanceCount} outside limit (${metric.exceedancePercent.toFixed(1)}%)`
+                      : "No exceedance"}
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-          <span>
-            {analysis.baseline.readingsWithIssue} of {analysis.baseline.records}{" "}
-            readings were outside at least one review limit.
-          </span>
-          <span className="font-medium text-slate-800">
-            {analysis.baseline.completeness.toFixed(1)}% expected sensor coverage
-          </span>
-        </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <span>
+                {analysis.baseline.readingsWithIssue} of {analysis.baseline.records}{" "}
+                readings were outside at least one review limit.
+              </span>
+              <span className="font-medium text-slate-800">
+                {analysis.baseline.completeness.toFixed(1)}% expected sensor coverage
+              </span>
+            </div>
+          </>
+        ) : (
+          <div className="rounded-xl border border-dashed border-violet-200 bg-violet-50/50 px-4 py-3 text-sm text-violet-800">
+            Environmental sensor readings were not included in the source
+            summary. This analysis is limited to the available production KPIs.
+          </div>
+        )}
 
         {isGenerating ? (
           <div className="rounded-xl border border-violet-100 bg-violet-50 p-5 text-sm text-violet-700">
@@ -359,7 +369,9 @@ export default function HistoricalCycleAiAnalysis({
               Select a question to explore this completed cycle
             </h4>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              The fixed sensor statistics above are available immediately.
+              {hasSensorData
+                ? "The fixed sensor statistics above are available immediately. "
+                : "The source production statistics are available immediately. "}
               Choose a question and click Analyse Selected Question for a
               focused explanation, evidence, and next-cycle actions.
             </p>
@@ -367,11 +379,13 @@ export default function HistoricalCycleAiAnalysis({
         )}
 
         <p className="text-xs leading-5 text-slate-500">
-          This analysis uses the stored sensor, mortality, and body-weight
-          records for {cycle.id}
+          This analysis uses the stored {hasSensorData ? "sensor, " : ""}
+          mortality and body-weight records for {cycle.id}
           {analysis.baseline.production.availability.feedWater
             ? ", including the available feed and water records"
-            : "; feed, water, and FCR were not included in the source workbook"}
+            : typeof cycle.production.reportedFcr === "number"
+              ? `; daily feed and water records were not included, while the source summary reports FCR ${cycle.production.reportedFcr.toFixed(2)}`
+              : "; feed, water, and FCR were not included in the source workbook"}
           . It does not infer disease or any farm outcome that is not stored in
           the selected historical snapshot.
         </p>

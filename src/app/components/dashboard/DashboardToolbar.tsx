@@ -26,6 +26,7 @@ export default function DashboardToolbar({
   soundEnabled,
   onToggleSound,
   onAcknowledge,
+  operationalStatus,
 }: {
   activeZones: Zone[];
   isSingleZone: boolean;
@@ -40,6 +41,7 @@ export default function DashboardToolbar({
   soundEnabled: boolean;
   onToggleSound: () => void;
   onAcknowledge: (id: string) => void;
+  operationalStatus: "active" | "inactive" | "replay";
 }) {
   const { selectedZone, selectZone } = useDashboardNavigation();
   const riskRank: Record<PredictionRiskLevel, number> = {
@@ -110,8 +112,20 @@ export default function DashboardToolbar({
             )}
           </div>
 
-          <span className="rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs text-violet-700">
-            Live Monitoring · {refreshIntervalMs / 1000}s refresh
+          <span
+            className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${
+              operationalStatus === "inactive"
+                ? "border-slate-300 bg-slate-100 text-slate-700"
+                : operationalStatus === "replay"
+                  ? "border-violet-300 bg-violet-100 text-violet-800"
+                : "border-violet-200 bg-violet-50 text-violet-700"
+            }`}
+          >
+            {operationalStatus === "inactive"
+              ? "Monitoring Inactive"
+              : operationalStatus === "replay"
+                ? `Replay Data · ${refreshIntervalMs / 1000}s step`
+              : `Live Monitoring · ${refreshIntervalMs / 1000}s refresh`}
           </span>
 
           {reportZones.map((zone) => {
@@ -123,7 +137,11 @@ export default function DashboardToolbar({
                 className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700"
               >
                 Zone {zone} ·{" "}
-                {zoneCycle.status === "draft"
+                {operationalStatus === "inactive"
+                  ? "Cycle not running"
+                  : operationalStatus === "replay"
+                    ? `Replay active · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`
+                  : zoneCycle.status === "draft"
                   ? "Not started"
                   : zoneCycle.status === "completed"
                     ? "Completed"
@@ -132,7 +150,9 @@ export default function DashboardToolbar({
             );
           })}
 
-          {highestCycleRisk && latestTime !== "-" && (
+          {(operationalStatus === "active" || operationalStatus === "replay") &&
+            highestCycleRisk &&
+            latestTime !== "-" && (
             <span
               className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[highestCycleRisk.assessment.level]}`}
               title={`Risk score ${highestCycleRisk.assessment.score}: ${highestCycleRisk.assessment.summary}`}
@@ -150,16 +170,18 @@ export default function DashboardToolbar({
           )}
 
           <span className="text-xs text-gray-500">
-            Current record: {latestTime}
+            Current record: {operationalStatus === "inactive" ? "—" : latestTime}
           </span>
         </div>
 
         <NotificationCenter
-          alerts={alerts}
+          alerts={operationalStatus === "inactive" ? [] : alerts}
           soundEnabled={soundEnabled}
           onToggleSound={onToggleSound}
           onAcknowledge={onAcknowledge}
-          cycleAlertEpisodeCount={cycleAlertEpisodeCount}
+          cycleAlertEpisodeCount={
+            operationalStatus === "inactive" ? 0 : cycleAlertEpisodeCount
+          }
         />
       </div>
     </section>

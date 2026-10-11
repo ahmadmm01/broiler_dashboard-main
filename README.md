@@ -188,6 +188,8 @@ dapat diubah lewat `.env.local` lalu restart server:
 ```env
 NEXT_PUBLIC_SENSOR_REPLAY_INTERVAL_MS=15000
 NEXT_PUBLIC_ACTIVE_ZONES=A,B,C
+NEXT_PUBLIC_OPERATIONAL_STATUS=active
+NEXT_PUBLIC_SENSOR_LAST_RECORDED_AT=
 ```
 
 Untuk mode audit satu zona, ubah menjadi `NEXT_PUBLIC_ACTIVE_ZONES=A`. Nilai
@@ -196,6 +198,17 @@ konfigurasi `NEXT_PUBLIC_`, restart `npm run dev`.
 
 Nilai minimum yang diterima adalah `5000` ms. Untuk laptop presentasi,
 `15000` sampai `30000` ms disarankan.
+
+Gunakan `NEXT_PUBLIC_OPERATIONAL_STATUS=inactive` ketika monitoring tidak
+berjalan. Mode ini menghentikan replay sensor, menampilkan CCTV sebagai
+disconnected, mempertahankan grafik sensor terakhir, dan membuat current-cycle
+data hanya dapat dibaca. Cycle tidak dapat dimulai atau diubah, tetapi data yang
+sudah tersimpan tidak dihapus. Ubah kembali menjadi `active` dan restart
+development server untuk melanjutkan operasi.
+
+Ketika mode `inactive`, isi `NEXT_PUBLIC_SENSOR_LAST_RECORDED_AT` dengan waktu
+bacaan terakhir dalam format `YYYY-MM-DD HH:mm`. Dashboard akan membekukan
+grafik pada waktu tersebut sehingga reload halaman tidak menambahkan data demo.
 
 AI summary dan Current Cycle Prediction menggunakan konfigurasi server-side:
 

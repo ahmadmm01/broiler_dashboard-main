@@ -46,7 +46,7 @@ export const HISTORICAL_ANALYSIS_QUESTIONS: HistoricalAnalysisQuestion[] = [
     id: "growth_efficiency",
     label: "How effective were growth, feed, water, and FCR?",
     description:
-      "Examine final weight, weight development, consumption, water-to-feed balance, and estimated FCR.",
+      "Examine final weight, weight development, consumption, water-to-feed balance, and FCR.",
     guidance:
       "Evaluate growth and efficiency only from available fields. Clearly distinguish missing reference weights, avoid inventing targets, and do not recommend feeding, watering, hydration, or nutrition programs.",
   },
@@ -322,9 +322,10 @@ export function createHistoricalCycleAnalysis(
       100
     : null;
   const estimatedFcr =
-    totalFeedPerBirdKg !== null && finalAverageWeightKg
+    production.reportedFcr ??
+    (totalFeedPerBirdKg !== null && finalAverageWeightKg
       ? totalFeedPerBirdKg / finalAverageWeightKg
-      : null;
+      : null);
   const firstWeekMortality = production.mortality
     .filter((item) => item.day <= 7)
     .reduce((total, item) => total + item.count, 0);
@@ -578,7 +579,7 @@ export function createHistoricalCycleAnalysis(
       ? `${weightVariancePercent.toFixed(2)}% versus the configured standard`
       : "no standard-weight series was included",
     estimatedFcr !== null && totalFeedPerBirdKg !== null
-      ? `${totalFeedPerBirdKg.toFixed(3)} kg feed per bird with estimated FCR ${estimatedFcr.toFixed(2)}`
+      ? `${totalFeedPerBirdKg.toFixed(3)} kg feed per bird with FCR ${estimatedFcr.toFixed(2)}`
       : "feed, water, and FCR were not available in the source workbook",
   ]
     .filter(Boolean)
@@ -660,7 +661,7 @@ export function createHistoricalCycleAnalysis(
 
   const efficiencySummary =
     estimatedFcr !== null
-      ? `estimated FCR ${estimatedFcr.toFixed(2)}`
+      ? `FCR ${estimatedFcr.toFixed(2)}`
       : "feed, water, and FCR not recorded";
   const monitoringFocus = metrics
     .filter((item) => item.exceedanceCount > 0)
@@ -709,7 +710,7 @@ export function createFocusedHistoricalAdvice(
     : 0;
   const fcrText =
     production.estimatedFcr !== null
-      ? `estimated FCR ${production.estimatedFcr.toFixed(2)}`
+      ? `FCR ${production.estimatedFcr.toFixed(2)}`
       : "FCR was not available";
   const phaseOutcomeEvidence = phases
     .map(
@@ -925,7 +926,7 @@ export function createFocusedHistoricalAdvice(
         : "Feed and water totals were not available";
 
     return {
-      summary: `${baseline.cycleLabel} finished at ${production.finalAverageWeightKg.toFixed(3)} kg average live weight with ${production.survivingBirds.toLocaleString()} surviving birds and ${production.estimatedLiveWeightKg.toLocaleString()} kg estimated live weight. The cycle used ${feedWaterEvidence} and produced ${fcrText}. ${
+      summary: `${baseline.cycleLabel} finished at ${production.finalAverageWeightKg.toFixed(3)} kg average live weight with ${production.survivingBirds.toLocaleString()} surviving birds and ${production.estimatedLiveWeightKg.toLocaleString()} kg calculated live weight. The cycle used ${feedWaterEvidence} and produced ${fcrText}. ${
         production.standardFinalWeightKg !== null
           ? `Final weight was ${production.weightVariancePercent?.toFixed(2)}% versus the configured standard.`
           : "No standard final-weight reference was stored, so efficiency should be compared with the farm's agreed target before judging it as good or poor."
@@ -1001,7 +1002,7 @@ export function createFocusedHistoricalAdvice(
         "Weight gain by phase",
         "Feed per bird",
         "Water-to-feed ratio",
-        "Estimated FCR",
+        "FCR",
         "Mortality-adjusted live output",
       ],
     };

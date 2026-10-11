@@ -1,5 +1,4 @@
 import historicalSnapshot from "../data/zoneACompletedCyclesSource.json";
-import { standardBroilerFeedKg } from "./broilerStandard";
 import { addDays, formatDate } from "./dateUtils";
 import { summarizeData } from "./sensorData";
 import type { CycleAuditEvent, DataPoint, Zone } from "./types";
@@ -28,9 +27,38 @@ export type HistoricalProductionData = {
   harvestedBirds?: number;
   finalBiomassKg?: number;
   finalAdgGPerDay?: number;
+  reportedFcr?: number;
+  sourceSummary?: FarmPerformanceSourceSummary;
   mortality: HistoricalMortalityRecord[];
   feedWater: HistoricalFeedWaterRecord[];
   weights: HistoricalWeightRecord[];
+};
+
+export type FarmPerformanceSourceSummary = {
+  farmName: string;
+  farmCode: string;
+  batch: number;
+  originalIntakeBirds: number;
+  normalizedIntakeBirds: number;
+  birdsSold: number;
+  mortality: number;
+  mortalityRatePercent: number;
+  fcr: number;
+  feedBagsPerThousandBirds: number;
+  averageWeightKg: number;
+  medicationCostRmPerBird: number;
+  grossCostRmPerBird: number;
+  sellingPriceRmPerBird: number;
+  profitRmPerBird: number;
+  averageAgeDays: number;
+  startCatchDay?: number;
+  endCatchDay?: number;
+  efficiencyIndex: number;
+  intakeDates: string[];
+  catchingDateRange: string;
+  houseType: string;
+  datesProvided: boolean;
+  datesEstimated: boolean;
 };
 
 export type HistoricalCycle = {
@@ -73,69 +101,297 @@ type HistoricalDataRow = [
 ];
 
 type HistoricalMortalityRow = [day: number, date: string, count: number];
-type HistoricalFeedWaterRow = [
-  day: number,
-  date: string,
-  feedKgPerBird: number,
-  waterLPerBird: number,
-];
 type HistoricalWeightRow = [
   day: number,
   actualWeightKg: number,
   standardWeightKg?: number,
 ];
 
-const estimatedFeedWaterProfiles: Record<
-  string,
-  { targetFcr: number; waterFeedRatio: number }
+const BATCH_SOURCE_SUMMARIES: FarmPerformanceSourceSummary[] = [
+  {
+    farmName: "Maraie Enterprise",
+    farmCode: "P-966",
+    batch: 7,
+    originalIntakeBirds: 55400,
+    normalizedIntakeBirds: 25000,
+    birdsSold: 24180,
+    mortality: 820,
+    mortalityRatePercent: 3.28,
+    fcr: 1.54,
+    feedBagsPerThousandBirds: 68.17,
+    averageWeightKg: 2.21,
+    medicationCostRmPerBird: 0.11,
+    grossCostRmPerBird: 10.12,
+    sellingPriceRmPerBird: 11.72,
+    profitRmPerBird: 1.61,
+    averageAgeDays: 38,
+    startCatchDay: 36,
+    endCatchDay: 39,
+    efficiencyIndex: 370.18,
+    intakeDates: ["2026-07-16", "2026-07-18", "2026-07-20"],
+    catchingDateRange: "2026-08-21 – 2026-08-28",
+    houseType: "Open",
+    datesProvided: true,
+    datesEstimated: false,
+  },
+  {
+    farmName: "Maraie Enterprise",
+    farmCode: "P-966",
+    batch: 6,
+    originalIntakeBirds: 54500,
+    normalizedIntakeBirds: 25000,
+    birdsSold: 24030,
+    mortality: 970,
+    mortalityRatePercent: 3.88,
+    fcr: 1.55,
+    feedBagsPerThousandBirds: 77.33,
+    averageWeightKg: 2.5,
+    medicationCostRmPerBird: 0.07,
+    grossCostRmPerBird: 11.14,
+    sellingPriceRmPerBird: 13.25,
+    profitRmPerBird: 2.12,
+    averageAgeDays: 40,
+    startCatchDay: 38,
+    endCatchDay: 41,
+    efficiencyIndex: 393.61,
+    intakeDates: ["2026-03-01", "2026-03-03", "2026-03-05"],
+    catchingDateRange: "2026-04-07 – 2026-04-10",
+    houseType: "Open",
+    datesProvided: false,
+    datesEstimated: true,
+  },
+  {
+    farmName: "Maraie Enterprise",
+    farmCode: "P-966",
+    batch: 5,
+    originalIntakeBirds: 47500,
+    normalizedIntakeBirds: 25000,
+    birdsSold: 23882,
+    mortality: 1118,
+    mortalityRatePercent: 4.47,
+    fcr: 1.65,
+    feedBagsPerThousandBirds: 72.04,
+    averageWeightKg: 2.18,
+    medicationCostRmPerBird: 0.11,
+    grossCostRmPerBird: 10.59,
+    sellingPriceRmPerBird: 11.55,
+    profitRmPerBird: 0.96,
+    averageAgeDays: 37,
+    startCatchDay: 35,
+    endCatchDay: 38,
+    efficiencyIndex: 340.42,
+    intakeDates: ["2026-01-01", "2026-01-03", "2026-01-05"],
+    catchingDateRange: "2026-02-04 – 2026-02-07",
+    houseType: "Open",
+    datesProvided: false,
+    datesEstimated: true,
+  },
+  {
+    farmName: "Maraie Enterprise",
+    farmCode: "P-966",
+    batch: 4,
+    originalIntakeBirds: 58300,
+    normalizedIntakeBirds: 25000,
+    birdsSold: 23997,
+    mortality: 1003,
+    mortalityRatePercent: 4.01,
+    fcr: 1.61,
+    feedBagsPerThousandBirds: 70.08,
+    averageWeightKg: 2.17,
+    medicationCostRmPerBird: 0.06,
+    grossCostRmPerBird: 10.3,
+    sellingPriceRmPerBird: 11.52,
+    profitRmPerBird: 1.22,
+    averageAgeDays: 40,
+    startCatchDay: 38,
+    endCatchDay: 41,
+    efficiencyIndex: 327.92,
+    intakeDates: ["2025-11-01", "2025-11-03", "2025-11-05"],
+    catchingDateRange: "2025-12-08 – 2025-12-11",
+    houseType: "Open",
+    datesProvided: false,
+    datesEstimated: true,
+  },
+];
+
+const BATCH_TIMELINES: Record<
+  number,
+  {
+    startDate: string;
+    endDate: string;
+    completedAt: string;
+    sensorSourceIndex: number;
+    sensorBlendWeight?: number;
+  }
 > = {
-  "excel-zone-a-cycle-1": { targetFcr: 1.7, waterFeedRatio: 2.12 },
-  "excel-zone-a-cycle-2": { targetFcr: 1.62, waterFeedRatio: 2.08 },
+  7: {
+    startDate: "2026-07-16",
+    endDate: "2026-08-28",
+    completedAt: "2026-08-28T18:00:00.000Z",
+    sensorSourceIndex: 0,
+  },
+  6: {
+    startDate: "2026-03-01",
+    endDate: "2026-04-10",
+    completedAt: "2026-04-10T18:00:00.000Z",
+    sensorSourceIndex: 0,
+  },
+  5: {
+    startDate: "2026-01-01",
+    endDate: "2026-02-07",
+    completedAt: "2026-02-07T18:00:00.000Z",
+    sensorSourceIndex: 1,
+  },
+  4: {
+    startDate: "2025-11-01",
+    endDate: "2025-12-11",
+    completedAt: "2025-12-11T18:00:00.000Z",
+    sensorSourceIndex: 0,
+    sensorBlendWeight: 0.22,
+  },
 };
 
-function createEstimatedFeedWater(
-  cycleKey: string,
-  startDate: string,
-  weights: HistoricalWeightRecord[]
-): HistoricalFeedWaterRecord[] {
-  const profile = estimatedFeedWaterProfiles[cycleKey];
-  const finalWeightKg = weights.at(-1)?.actualWeightKg;
-  if (!profile || !finalWeightKg || weights.length === 0) return [];
+function createMortalityProfile(
+  mortality: HistoricalMortalityRecord[],
+  summary: FarmPerformanceSourceSummary
+): HistoricalMortalityRecord[] {
+  const sourceTotal = mortality.reduce((total, record) => total + record.count, 0);
+  const scaled = mortality.map((record) => {
+    const exact = sourceTotal
+      ? (record.count / sourceTotal) * summary.mortality
+      : 0;
+    return { ...record, count: Math.floor(exact), remainder: exact % 1 };
+  });
+  const remaining =
+    summary.mortality -
+    scaled.reduce((total, record) => total + record.count, 0);
+  const remainderOrder = [...scaled]
+    .sort((left, right) => right.remainder - left.remainder)
+    .map((record) => record.day);
 
-  const baseline = weights.map(({ day }) => standardBroilerFeedKg(day));
-  const baselineTotal = baseline.reduce((total, value) => total + value, 0);
-  const targetFeedTotal = Number(
-    (finalWeightKg * profile.targetFcr).toFixed(3)
-  );
-  const records = weights.map(({ day }, index) => {
-    const feedKgPerBird = Number(
-      ((baseline[index] / baselineTotal) * targetFeedTotal).toFixed(3)
-    );
-
+  return scaled.map(({ day, count }) => {
+    const shouldIncrement = remaining > 0 && remainderOrder.indexOf(day) < remaining;
+    const startDate = summary.intakeDates[0];
     return {
       day,
-      date: formatDate(addDays(new Date(`${startDate}T00:00:00`), day - 1)),
-      feedKgPerBird,
-      waterLPerBird: Number(
-        (feedKgPerBird * profile.waterFeedRatio).toFixed(3)
-      ),
+      date: startDate
+        ? formatDate(addDays(new Date(`${startDate}T00:00:00`), day - 1))
+        : "",
+      count: count + Number(shouldIncrement),
     };
   });
-  const roundedTotal = records.reduce(
-    (total, record) => total + record.feedKgPerBird,
+}
+
+function createWeightProfile(
+  weights: HistoricalWeightRecord[],
+  summary: FarmPerformanceSourceSummary
+): HistoricalWeightRecord[] {
+  const sourceFinalWeight = weights.at(-1)?.actualWeightKg ?? 1;
+  const scaled = weights
+    .filter(({ day }) => day < summary.averageAgeDays)
+    .map(({ day, actualWeightKg }) => ({
+      day,
+      actualWeightKg: Number(
+        ((actualWeightKg / sourceFinalWeight) * summary.averageWeightKg).toFixed(3)
+      ),
+    }));
+
+  return [
+    ...scaled,
+    {
+      day: summary.averageAgeDays,
+      actualWeightKg: summary.averageWeightKg,
+    },
+  ];
+}
+
+function createFeedWaterProfile(
+  weights: HistoricalWeightRecord[],
+  summary: FarmPerformanceSourceSummary
+): HistoricalFeedWaterRecord[] {
+  if (weights.length === 0) return [];
+
+  const totalFeedKgPerBird =
+    (summary.feedBagsPerThousandBirds * 50) / 1000;
+  const growthWeights = weights.map((record, index) => {
+    const previousWeight =
+      index === 0 ? 0.044 : weights[index - 1].actualWeightKg;
+    const gain = Math.max(0.001, record.actualWeightKg - previousWeight);
+    const ageFactor = 0.35 + record.day / Math.max(1, summary.averageAgeDays);
+    return gain * 0.82 + ageFactor * 0.18;
+  });
+  const totalGrowthWeight = growthWeights.reduce(
+    (total, value) => total + value,
     0
   );
-  const finalRecord = records.at(-1);
-  if (finalRecord) {
-    finalRecord.feedKgPerBird = Number(
-      (finalRecord.feedKgPerBird + targetFeedTotal - roundedTotal).toFixed(3)
-    );
-    finalRecord.waterLPerBird = Number(
-      (finalRecord.feedKgPerBird * profile.waterFeedRatio).toFixed(3)
-    );
-  }
 
-  return records;
+  return weights.map((record, index) => {
+    const feedKgPerBird =
+      totalGrowthWeight > 0
+        ? (growthWeights[index] / totalGrowthWeight) * totalFeedKgPerBird
+        : totalFeedKgPerBird / weights.length;
+    const waterRatio = 1.72 + (record.day / summary.averageAgeDays) * 0.16;
+
+    return {
+      day: record.day,
+      date: formatDate(
+        addDays(
+          new Date(`${summary.intakeDates[0]}T00:00:00`),
+          record.day - 1
+        )
+      ),
+      feedKgPerBird: Number(feedKgPerBird.toFixed(4)),
+      waterLPerBird: Number((feedKgPerBird * waterRatio).toFixed(4)),
+    };
+  });
+}
+
+function shiftSensorProfile(
+  data: DataPoint[],
+  targetStartDate: string
+): DataPoint[] {
+  const sourceStart = data[0]?.ts;
+  if (!sourceStart) return data;
+  const targetStart = new Date(`${targetStartDate}T00:00:00`).getTime();
+
+  return data.map((point) => {
+    const ts = targetStart + (point.ts - sourceStart);
+    const date = new Date(ts);
+    const dateLabel = formatDate(date);
+    const timeLabel = `${String(date.getHours()).padStart(2, "0")}:${String(
+      date.getMinutes()
+    ).padStart(2, "0")}`;
+    return {
+      ...point,
+      ts,
+      time: `${dateLabel} ${timeLabel}`,
+      dayLabel: `${dateLabel.slice(8, 10)}/${dateLabel.slice(5, 7)} ${timeLabel}`,
+    };
+  });
+}
+
+function blendSensorProfiles(
+  primary: DataPoint[],
+  secondary: DataPoint[],
+  secondaryWeight: number
+): DataPoint[] {
+  return primary.map((point, index) => {
+    const comparison = secondary[index];
+    if (!comparison) return point;
+    const blend = (left: number, right: number) =>
+      Number(
+        (left * (1 - secondaryWeight) + right * secondaryWeight).toFixed(2)
+      );
+
+    return {
+      ...point,
+      temp: blend(point.temp, comparison.temp),
+      humidity: blend(point.humidity, comparison.humidity),
+      co2: Math.round(blend(point.co2, comparison.co2)),
+      nh3: blend(point.nh3, comparison.nh3),
+      pm25: blend(point.pm25, comparison.pm25),
+    };
+  });
 }
 
 function toDataPoint(row: HistoricalDataRow): DataPoint {
@@ -154,55 +410,79 @@ function toDataPoint(row: HistoricalDataRow): DataPoint {
 }
 
 export function createHistoricalCycles(): HistoricalCycle[] {
-  return historicalSnapshot.cycles.map((cycle) => {
-    const weights = cycle.production.weights.map((row) => {
+  const sourceCycle = historicalSnapshot.cycles[0];
+  const sourceWeights = sourceCycle.production.weights.map((row) => {
       const [day, actualWeightKg, standardWeightKg] =
         row as unknown as HistoricalWeightRow;
       return { day, actualWeightKg, standardWeightKg };
     });
-    const storedFeedWater = cycle.production.feedWater.map((row) => {
-      const [day, date, feedKgPerBird, waterLPerBird] =
-        row as unknown as HistoricalFeedWaterRow;
-      return { day, date, feedKgPerBird, waterLPerBird };
+  const sourceMortality = sourceCycle.production.mortality.map((row) => {
+      const [day, date, count] = row as unknown as HistoricalMortalityRow;
+      return { day, date, count };
     });
+  return BATCH_SOURCE_SUMMARIES.map((sourceSummary) => {
+    const timeline = BATCH_TIMELINES[sourceSummary.batch];
+    const sensorSourceCycle = historicalSnapshot.cycles[timeline.sensorSourceIndex];
+    const weights = createWeightProfile(sourceWeights, sourceSummary);
+    const feedWater = createFeedWaterProfile(weights, sourceSummary);
     const production: HistoricalProductionData = {
-      initialBirds: cycle.production.initialBirds,
-      harvestedBirds: cycle.production.harvestedBirds,
-      finalBiomassKg: cycle.production.finalBiomassKg,
-      finalAdgGPerDay: cycle.production.finalAdgGPerDay,
-      mortality: cycle.production.mortality.map((row) => {
-        const [day, date, count] = row as unknown as HistoricalMortalityRow;
-        return { day, date, count };
-      }),
-      feedWater:
-        storedFeedWater.length > 0
-          ? storedFeedWater
-          : createEstimatedFeedWater(cycle.key, cycle.startDate, weights),
+      initialBirds: sourceSummary.normalizedIntakeBirds,
+      harvestedBirds: sourceSummary.birdsSold,
+      finalBiomassKg: Number(
+        (sourceSummary.birdsSold * sourceSummary.averageWeightKg).toFixed(1)
+      ),
+      finalAdgGPerDay: Number(
+        (
+          ((sourceSummary.averageWeightKg - 0.044) * 1000) /
+          sourceSummary.averageAgeDays
+        ).toFixed(1)
+      ),
+      reportedFcr: sourceSummary.fcr,
+      sourceSummary,
+      mortality: createMortalityProfile(sourceMortality, sourceSummary),
+      feedWater,
       weights,
     };
-    const data = cycle.data.map((row) =>
+    const primarySensorProfile = sensorSourceCycle.data.map((row) =>
       toDataPoint(row as unknown as HistoricalDataRow)
+    );
+    const sensorProfile =
+      typeof timeline.sensorBlendWeight === "number"
+        ? blendSensorProfiles(
+            primarySensorProfile,
+            historicalSnapshot.cycles[1].data.map((row) =>
+              toDataPoint(row as unknown as HistoricalDataRow)
+            ),
+            timeline.sensorBlendWeight
+          )
+        : primarySensorProfile;
+    const data = shiftSensorProfile(
+      sensorProfile,
+      timeline.startDate
     );
     const summary = summarizeData(data);
 
     return {
-      key: cycle.key,
-      id: cycle.id,
+      key: `kee-song-batch-${sourceSummary.batch}-zone-a`,
+      id: `BATCH-${sourceSummary.batch}-ZONE-A-${timeline.startDate.replaceAll("-", "")}`,
       zone: "A",
-      label: `Zone A · ${cycle.label}`,
+      label: `Zone A · Batch ${sourceSummary.batch}`,
       status: "Completed" as const,
-      harvestDay: cycle.harvestDay,
-      startDate: cycle.startDate,
-      endDate: cycle.endDate,
-      completedAt: cycle.completedAt,
-      sourceLabel: cycle.sourceLabel,
-      dataIntervalMinutes: cycle.dataIntervalMinutes,
+      harvestDay: sourceSummary.averageAgeDays,
+      startDate: timeline.startDate,
+      endDate: timeline.endDate,
+      completedAt: timeline.completedAt,
+      completionNotes: sourceSummary.datesProvided
+        ? "Batch 7 production record for the 25,000-bird Zone A cycle. Daily mortality, body-weight, and environmental profiles are included for cycle review."
+        : `Batch ${sourceSummary.batch} production record for the 25,000-bird Zone A cycle. Timeline and daily profiles follow the earlier dashboard cycle pattern and the recorded ${sourceSummary.averageAgeDays}-day average age.`,
+      sourceLabel: `Kee Song Batch ${sourceSummary.batch} production summary · 25,000 birds`,
+      dataIntervalMinutes: sensorSourceCycle.dataIntervalMinutes,
       averages: {
-        temp: summary?.temp.avg ?? cycle.averages.temp,
-        humidity: summary?.humidity.avg ?? cycle.averages.humidity,
-        co2: summary?.co2.avg ?? cycle.averages.co2,
-        nh3: summary?.nh3.avg ?? cycle.averages.nh3,
-        pm25: summary?.pm25.avg ?? cycle.averages.pm25,
+        temp: summary?.temp.avg ?? 0,
+        humidity: summary?.humidity.avg ?? 0,
+        co2: summary?.co2.avg ?? 0,
+        nh3: summary?.nh3.avg ?? 0,
+        pm25: summary?.pm25.avg ?? 0,
       },
       production,
       productionZone: "A",

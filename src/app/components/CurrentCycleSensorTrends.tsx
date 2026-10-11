@@ -154,8 +154,12 @@ function formatLive(data: DataPoint[]): TrendPoint[] {
 
 export default function CurrentCycleSensorTrends({
   series,
+  disconnected = false,
+  replay = false,
 }: {
   series: CurrentCycleSensorSeries[];
+  disconnected?: boolean;
+  replay?: boolean;
 }) {
   const [aggregation, setAggregation] =
     useState<AggregationMode>("hourly");
@@ -245,23 +249,39 @@ export default function CurrentCycleSensorTrends({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">
-              {hasActiveCycle
+              {replay
+                ? "Replay data"
+                : disconnected
+                ? "Environmental data"
+                : hasActiveCycle
                 ? "Current cycle environment"
                 : "Environmental monitoring"}
             </div>
             <h2 className="mt-1 text-2xl font-semibold text-slate-950">
-              {hasActiveCycle
+              {replay
+                ? "Sensor Replay Trends"
+                : disconnected
+                ? "Last Recorded Sensor Trends"
+                : hasActiveCycle
                 ? "Current Cycle Sensor Trends"
                 : "Environmental Sensor Trends"}
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              {!hasActiveCycle
+              {replay
+                ? "Stored environmental readings advance with the dashboard replay timestamp. These charts are not live sensor monitoring."
+                : disconnected
+                ? "Sensor connection is inactive. The charts below show the last recorded data and are not realtime."
+                : !hasActiveCycle
                 ? "Sensor monitoring remains available before a production cycle starts."
                 : series.length === 1
                 ? `One-minute environmental readings from ${series[0].cycle.startDate} onward for ${zoneLabel}.`
-                : "Each zone is filtered from its own active-cycle start date, so zones at different flock ages remain comparable without mixing their timelines."}{" "}
-              Live mode follows the latest six-hour rolling window for every
-              displayed zone.
+                : "Each zone is filtered from its own active-cycle start date, so zones at different flock ages remain comparable without mixing their timelines."}
+              {!disconnected && !replay && (
+                <>
+                  {" "}Live mode follows the latest six-hour rolling window for
+                  every displayed zone.
+                </>
+              )}
             </p>
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               {series.map(({ zone, cycle: zoneCycle, data }) => {
@@ -274,7 +294,11 @@ export default function CurrentCycleSensorTrends({
                     key={zone}
                     className="rounded-full border border-cyan-100 bg-white px-2.5 py-1 text-cyan-800"
                   >
-                    {zoneCycle.status === "draft"
+                    {replay
+                      ? `Zone ${zone} · Replay data`
+                      : disconnected
+                      ? `Zone ${zone} · Sensor disconnected`
+                      : zoneCycle.status === "draft"
                       ? `Zone ${zone} · No active cycle`
                       : `Zone ${zone} · ${zoneCycle.id} · Day ${cycleDay}`}
                   </span>
@@ -292,8 +316,20 @@ export default function CurrentCycleSensorTrends({
                     ? "hourly points"
                     : "daily points"}
               </span>
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
-                Updates every minute
+              <span
+                className={`rounded-full border px-2.5 py-1 font-semibold ${
+                  disconnected
+                    ? "border-slate-300 bg-slate-100 text-slate-700"
+                    : replay
+                      ? "border-violet-200 bg-violet-50 text-violet-700"
+                    : "border-emerald-200 bg-emerald-50 text-emerald-700"
+                }`}
+              >
+                {replay
+                  ? "Replay timestamp active"
+                  : disconnected
+                    ? "Sensor Disconnected"
+                    : "Updates every minute"}
               </span>
             </div>
           </div>
@@ -303,7 +339,14 @@ export default function CurrentCycleSensorTrends({
           >
             {(
               [
-                ["live", "Live · Last 6 Hours"],
+                [
+                  "live",
+                  replay
+                    ? "Replay · Recent Window"
+                    : disconnected
+                      ? "Last Recorded · 6 Hours"
+                      : "Live · Last 6 Hours",
+                ],
                 ["hourly", "Hourly Average"],
                 ["daily", "Daily Average"],
               ] as const
@@ -325,6 +368,17 @@ export default function CurrentCycleSensorTrends({
           </div>
         </div>
       </div>
+
+      {disconnected && (
+        <div className="border-b border-slate-200 bg-slate-900 px-5 py-3 text-sm font-semibold text-white">
+          Sensor Disconnected · Displaying last recorded environmental data
+        </div>
+      )}
+      {replay && (
+        <div className="border-b border-violet-200 bg-violet-700 px-5 py-3 text-sm font-semibold text-white">
+          Replay Data · Charts follow the shared dashboard playback position
+        </div>
+      )}
 
       {totalReadings === 0 ? (
         <div className="p-8 text-center">

@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { VideoSourceConfigResponse, Zone } from "@/app/lib/types";
 
 type CameraFeedProps = {
@@ -9,6 +9,10 @@ type CameraFeedProps = {
   dummySrc: string;
   className?: string;
   available?: boolean;
+  disconnected?: boolean;
+  replay?: boolean;
+  replayPlaying?: boolean;
+  replayProgress?: number;
 };
 
 let configRequest: Promise<VideoSourceConfigResponse> | null = null;
@@ -30,6 +34,10 @@ export default function CameraFeed({
   dummySrc,
   className = "w-full h-full object-cover",
   available,
+  disconnected = false,
+  replay = false,
+  replayPlaying = true,
+  replayProgress = 0,
 }: CameraFeedProps) {
   const cameraAvailable = available ?? zone === "A";
   const [config, setConfig] = useState<VideoSourceConfigResponse | null>(null);
@@ -37,9 +45,10 @@ export default function CameraFeed({
   const [streamFailed, setStreamFailed] = useState(false);
   const [streamConnected, setStreamConnected] = useState(false);
   const [retryNumber, setRetryNumber] = useState(0);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
-    if (!cameraAvailable) return;
+    if (!cameraAvailable || disconnected || replay) return;
 
     let active = true;
     loadVideoConfig()
@@ -52,18 +61,34 @@ export default function CameraFeed({
     return () => {
       active = false;
     };
-  }, [cameraAvailable]);
+  }, [cameraAvailable, disconnected, replay]);
 
   useEffect(() => {
     setStreamFailed(false);
     setStreamConnected(false);
   }, [zone, retryNumber, config?.mode]);
 
+  useEffect(() => {
+    if (!replay || !videoRef.current) return;
+    if (replayPlaying) {
+      void videoRef.current.play().catch(() => undefined);
+    } else {
+      videoRef.current.pause();
+    }
+  }, [replay, replayPlaying]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!replay || !video || !Number.isFinite(video.duration)) return;
+    const target = Math.min(1, Math.max(0, replayProgress)) * video.duration;
+    if (Math.abs(video.currentTime - target) > 1) video.currentTime = target;
+  }, [replay, replayProgress]);
+
   const rtspConfigured =
     cameraAvailable &&
     config?.mode === "rtsp" &&
     config.zones[zone].configured;
-  const showRtsp = rtspConfigured && !streamFailed;
+  const showRtsp = !disconnected && !replay && rtspConfigured && !streamFailed;
   const streamUrl = useMemo(() => {
     if (!config || !rtspConfigured) return null;
     const query = new URLSearchParams({
@@ -83,7 +108,19 @@ export default function CameraFeed({
 
   return (
     <>
-      {!cameraAvailable ? (
+      {disconnected ? (
+        <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 px-6 text-center text-white">
+          <div className="rounded-2xl border border-white/15 bg-white/5 px-6 py-5 shadow-xl backdrop-blur-sm">
+            <div
+              className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white/10 text-xl"
+              aria-hidden="true"
+            >
+              📷
+            </div>
+            <div className="mt-3 text-sm font-semibold">CCTV Disconnected</div>
+          </div>
+        </div>
+      ) : !cameraAvailable ? (
         <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 px-6 text-center text-white">
           <div>
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white/10 text-xl">
@@ -109,12 +146,20 @@ export default function CameraFeed({
         />
       ) : (
         <video
+          ref={videoRef}
           src={dummySrc}
-          autoPlay
+          autoPlay={!replay || replayPlaying}
           loop
           muted
           playsInline
           className={className}
+          onLoadedMetadata={(event) => {
+            if (!replay) return;
+            event.currentTarget.currentTime =
+              Math.min(1, Math.max(0, replayProgress)) *
+              event.currentTarget.duration;
+            if (!replayPlaying) event.currentTarget.pause();
+          }}
         />
       )}
 
@@ -128,6 +173,17 @@ export default function CameraFeed({
             }`}
           />
           {streamConnected ? "Live RTSP" : "Connecting RTSP"}
+        </div>
+      )}
+
+      {replay && !disconnected && cameraAvailable && (
+        <div className="absolute left-3 top-3 flex items-center gap-2 rounded-full bg-violet-700/90 px-2.5 py-1 text-xs font-semibold text-white backdrop-blur-sm">
+          <span
+            className={`h-2 w-2 rounded-full bg-white ${
+              replayPlaying ? "animate-pulse" : "opacity-60"
+            }`}
+          />
+          Replay CCTV · {replayPlaying ? "Playing" : "Paused"}
         </div>
       )}
 

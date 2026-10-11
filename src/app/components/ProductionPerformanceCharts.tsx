@@ -59,9 +59,11 @@ function summarizeProduction(production: HistoricalProductionData) {
         finalWeight.standardWeightKg!) *
       100
     : null;
-  const estimatedFcr = hasFeedWaterData && finalAverageWeightKg
-    ? totalFeed / finalAverageWeightKg
-    : null;
+  const estimatedFcr =
+    production.reportedFcr ??
+    (hasFeedWaterData && finalAverageWeightKg
+      ? totalFeed / finalAverageWeightKg
+      : null);
   const finalBiomassKg =
     production.finalBiomassKg ?? survivingBirds * finalAverageWeightKg;
 
@@ -430,7 +432,7 @@ export default function ProductionPerformanceCharts({
                   ],
                   ["Biomass", `${integer.format(summary.finalBiomassKg)} kg`],
                   [
-                    "Estimated FCR",
+                    "FCR",
                     summary.estimatedFcr?.toFixed(2) ?? "Not available",
                   ],
                 ].map(([metricLabel, value]) => (
@@ -471,7 +473,7 @@ export default function ProductionPerformanceCharts({
             ],
             ["Biomass", `${integer.format(firstSummary.finalBiomassKg)} kg`],
             [
-              "Estimated FCR",
+              "FCR",
               firstSummary.estimatedFcr?.toFixed(2) ?? "Not available",
             ],
           ].map(([label, value]) => (

@@ -104,11 +104,13 @@ function formatHarvestTiming(
 export default function CurrentCyclePrediction({
   inputs,
   onReportAnalysisChange,
+  replay = false,
 }: {
   inputs: CurrentCyclePredictionInput[];
   onReportAnalysisChange?: (
     snapshot: CurrentCycleReportAnalysisSnapshot
   ) => void;
+  replay?: boolean;
 }) {
   const predictions = useMemo(
     () =>
@@ -295,6 +297,7 @@ export default function CurrentCyclePrediction({
   useEffect(() => {
     if (
       !isMultiZone ||
+      replay ||
       !hasReadyZoneData ||
       hasRequestedAi ||
       isGenerating ||
@@ -312,6 +315,7 @@ export default function CurrentCyclePrediction({
     hasReadyZoneData,
     isGenerating,
     isMultiZone,
+    replay,
   ]);
 
   if (!primaryPrediction) return null;
@@ -329,7 +333,9 @@ export default function CurrentCyclePrediction({
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-2xl font-semibold text-slate-950">
-                {isMultiZone
+                {replay
+                  ? "Replay Cycle Prediction"
+                  : isMultiZone
                   ? "Current Cycle AI Zone Summary"
                   : "Current Cycle Prediction"}
               </h2>
@@ -346,7 +352,9 @@ export default function CurrentCyclePrediction({
               </span>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              {isMultiZone
+              {replay
+                ? "Forecast and on-demand AI recommendations based only on production and environmental records available at the current replay timestamp."
+                : isMultiZone
                 ? "Automatic current-condition summary for every active zone. Forecasting is available after selecting one zone."
                 : "Forecast of the configured harvest outcome if the current production and environmental trend continues."}
             </p>
@@ -392,7 +400,9 @@ export default function CurrentCyclePrediction({
                   ? "Summarising All Zones…"
                   : "Analysing Current Cycle…"
                 : isMultiZone
-                  ? "Regenerate AI Summary"
+                  ? hasCurrentAiResult
+                    ? "Regenerate AI Summary"
+                    : "Generate AI Summary"
                   : hasCurrentAiResult
                   ? "Refresh AI Recommendations"
                   : "Generate AI Recommendations"}
@@ -411,9 +421,11 @@ export default function CurrentCyclePrediction({
                     ? "Verified rule-based zone summary"
                     : "Verified rule-based recommendations"
                   : isMultiZone
-                    ? hasReadyZoneData
-                      ? "AI summary starts automatically"
-                      : "Waiting for complete zone data"
+                    ? replay
+                      ? "Replay snapshot ready · AI runs only on request"
+                      : hasReadyZoneData
+                        ? "AI summary starts automatically"
+                        : "Waiting for complete zone data"
                     : "Forecast ready · AI runs only on request"}
             </span>
           </div>
@@ -734,7 +746,9 @@ export default function CurrentCyclePrediction({
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               {isMultiZone
-                ? "The AI current-condition summary starts automatically when All Zones is opened."
+                ? replay
+                  ? "The replay forecast is calculated locally. Generate the AI summary only when you want an AI interpretation of the current replay snapshot."
+                  : "The AI current-condition summary starts automatically when All Zones is opened."
                 : "The numeric forecast above is calculated locally from the current cycle. Click Generate AI Recommendations when you want additional interpretation, risks, and priority farmer actions."}
             </p>
           </div>

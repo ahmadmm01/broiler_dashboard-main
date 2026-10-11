@@ -4,9 +4,11 @@ import DashboardTabs from "./DashboardTabs";
 
 export default function DashboardShell({
   toolbar,
+  globalControls,
   children,
 }: {
   toolbar: ReactNode;
+  globalControls?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -38,6 +40,7 @@ export default function DashboardShell({
 
       <hr className="my-4 border-gray-300" />
       {toolbar}
+      {globalControls}
       <DashboardTabs />
 
       <main id="dashboard-content" className="flex flex-col gap-8">

@@ -43,6 +43,7 @@ import CurrentCycleSensorTrends from "./components/CurrentCycleSensorTrends";
 import SensorTrendCard from "./components/SensorTrendCard";
 import HistoricalCycleAiAnalysis from "./components/HistoricalCycleAiAnalysis";
 import HistoricalProductionOverview from "./components/HistoricalProductionOverview";
+import OverviewReplayInsight from "./components/OverviewReplayInsight";
 import ProductionPerformanceCharts, {
   type ProductionPerformanceSeries,
 } from "./components/ProductionPerformanceCharts";
@@ -96,6 +97,11 @@ import type {
   HistoricalCycleReportAnalysisSnapshot,
 } from "./lib/reportAnalysis";
 import { useCycleAlerts } from "./hooks/useCycleAlerts";
+import {
+  createReplayCycles,
+  createReplayProductionRecords,
+  sliceReplayProduction,
+} from "./lib/replayCycle";
 
 // ========= Helpers =========
 
@@ -106,6 +112,16 @@ const REALTIME_INTERVAL_MS =
   Number.isFinite(configuredReplayInterval) && configuredReplayInterval >= 60_000
     ? configuredReplayInterval
     : 60_000;
+const OPERATIONAL_STATUS =
+  process.env.NEXT_PUBLIC_OPERATIONAL_STATUS?.trim().toLowerCase() ===
+  "inactive"
+    ? "inactive"
+    : "active";
+const IS_OPERATIONAL = OPERATIONAL_STATUS === "active";
+const IS_REPLAY_MODE = !IS_OPERATIONAL;
+const REPLAY_INTERVAL_MS = 1_800;
+const SENSOR_LAST_RECORDED_AT =
+  process.env.NEXT_PUBLIC_SENSOR_LAST_RECORDED_AT?.trim() ?? "";
 const ALL_ZONES: Zone[] = ["A", "B", "C"];
 const SENSOR_METRICS: SensorMetric[] = [
   "temp",
@@ -452,6 +468,14 @@ function CardItem({ item }: CardItemProps) {
   );
 }
 
+const INACTIVE_SENSOR_CARDS = [
+  { label: "Temperature", icon: "🌡️" },
+  { label: "Humidity", icon: "💧" },
+  { label: "CO₂", icon: "🌫️" },
+  { label: "NH₃", icon: "⚗️" },
+  { label: "PM2.5", icon: "🫁" },
+] as const;
+
 function DashboardContent() {
   const { activeTab, selectedZone } = useDashboardNavigation();
   const isAllZone = selectedZone === "ALL";
@@ -491,7 +515,7 @@ function DashboardContent() {
   );
   const selectedCycleZone: Zone =
     selectedZone === "ALL" ? (ACTIVE_ZONES[0] ?? "A") : selectedZone;
-  const cycle = cyclesByZone[selectedCycleZone];
+  const storedCycle = cyclesByZone[selectedCycleZone];
 
   useEffect(() => {
     const needsNormalization = ALL_ZONES.some((zone) => {
@@ -614,10 +638,96 @@ function DashboardContent() {
       selectedZone === "ALL"
         ? []
         : allHistoricalCycles.filter(
-            (historicalCycle) => historicalCycle.zone === selectedZone
+            (historicalCycle) =>
+              historicalCycle.zone === selectedZone &&
+              (!IS_REPLAY_MODE ||
+                historicalCycle.production.sourceSummary?.batch !== 7)
           ),
     [allHistoricalCycles, selectedZone]
   );
+  const overviewReplayCycle = useMemo(
+    () =>
+      allHistoricalCycles.find(
+        (historicalCycle) =>
+          historicalCycle.zone === "A" &&
+          historicalCycle.production.sourceSummary?.batch === 7 &&
+          historicalCycle.data.length > 0
+      ) ?? allHistoricalCycles.find((historicalCycle) => historicalCycle.data.length > 0),
+    [allHistoricalCycles]
+  );
+  const replayData = useMemo(
+    () => overviewReplayCycle?.data ?? [],
+    [overviewReplayCycle]
+  );
+  const [replayIndex, setReplayIndex] = useState(0);
+  const [isReplayPlaying, setIsReplayPlaying] = useState(true);
+  const [replaySpeed, setReplaySpeed] = useState(1);
+  const replayMaximumIndex = Math.max(0, replayData.length - 1);
+  const replayPoint = replayData[Math.min(replayIndex, replayMaximumIndex)];
+  const replayCycleDay =
+    overviewReplayCycle && replayPoint
+      ? Math.min(
+          overviewReplayCycle.harvestDay,
+          dateToDayNumber(
+            replayPoint.time.slice(0, 10),
+            overviewReplayCycle.startDate
+          )
+        )
+      : 1;
+  const replayCyclesByZone = useMemo(
+    () =>
+      overviewReplayCycle
+        ? createReplayCycles(overviewReplayCycle)
+        : createDraftProductionCycles(),
+    [overviewReplayCycle]
+  );
+  const dashboardCyclesByZone = IS_REPLAY_MODE
+    ? replayCyclesByZone
+    : cyclesByZone;
+  const cycle = IS_REPLAY_MODE
+    ? dashboardCyclesByZone[selectedCycleZone]
+    : storedCycle;
+  const replayProductionRecords = useMemo(
+    () =>
+      overviewReplayCycle
+        ? createReplayProductionRecords(
+            overviewReplayCycle,
+            replayCycleDay,
+            replayCyclesByZone
+          )
+        : { mortality: [], consumptions: [], weights: [] },
+    [overviewReplayCycle, replayCycleDay, replayCyclesByZone]
+  );
+  const dashboardMortality = IS_REPLAY_MODE
+    ? replayProductionRecords.mortality
+    : cycleMortality;
+  const dashboardConsumptions = IS_REPLAY_MODE
+    ? replayProductionRecords.consumptions
+    : cycleConsumptions;
+  const dashboardWeights = IS_REPLAY_MODE
+    ? replayProductionRecords.weights
+    : cycleWeights;
+  const replayRecentPoints = useMemo(
+    () => replayData.slice(Math.max(0, replayIndex - 15), replayIndex + 1),
+    [replayData, replayIndex]
+  );
+
+  useEffect(() => {
+    if (!IS_REPLAY_MODE || !isReplayPlaying || replayData.length === 0) return;
+    const interval = window.setInterval(() => {
+      setReplayIndex((current) =>
+        current >= replayMaximumIndex
+          ? current
+          : Math.min(replayMaximumIndex, current + replaySpeed)
+      );
+    }, REPLAY_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [isReplayPlaying, replayData.length, replayMaximumIndex, replaySpeed]);
+  useEffect(() => {
+    if (IS_REPLAY_MODE && replayIndex >= replayMaximumIndex) {
+      setIsReplayPlaying(false);
+    }
+  }, [replayIndex, replayMaximumIndex]);
   const selectedHistoricalCycle = useMemo(
     () =>
       historicalCycles.find(
@@ -726,7 +836,7 @@ function DashboardContent() {
 
   // Append one deterministic one-minute sensor reading while the demo is open.
   useEffect(() => {
-    if (allData.length === 0) return;
+    if (!IS_OPERATIONAL || allData.length === 0) return;
 
     const interval = setInterval(() => {
       setAllData((previous) => {
@@ -741,17 +851,25 @@ function DashboardContent() {
 
     return () => clearInterval(interval);
   }, [allData.length]);
-  const livePoint = allData.at(-1);
+  const monitoringData = useMemo(
+    () =>
+      IS_REPLAY_MODE ? replayData.slice(0, replayIndex + 1) : allData,
+    [allData, replayData, replayIndex]
+  );
+  const livePoint = IS_REPLAY_MODE ? replayPoint : allData.at(-1);
   const liveZoneData = useMemo(() => {
     if (!livePoint) return null;
 
-    const latestIndex = Math.max(0, allData.length - 1);
+    const latestIndex = IS_REPLAY_MODE
+      ? Math.min(replayIndex, replayMaximumIndex)
+      : Math.max(0, allData.length - 1);
+    const totalPoints = IS_REPLAY_MODE ? replayData.length : allData.length;
     return {
-      A: getZonePoint(livePoint, latestIndex, allData.length, "A"),
-      B: getZonePoint(livePoint, latestIndex, allData.length, "B"),
-      C: getZonePoint(livePoint, latestIndex, allData.length, "C"),
+      A: getZonePoint(livePoint, latestIndex, totalPoints, "A"),
+      B: getZonePoint(livePoint, latestIndex, totalPoints, "B"),
+      C: getZonePoint(livePoint, latestIndex, totalPoints, "C"),
     };
-  }, [allData.length, livePoint]);
+  }, [allData.length, livePoint, replayData.length, replayIndex, replayMaximumIndex]);
   const {
     cycleAlerts,
     visibleAlerts,
@@ -762,13 +880,18 @@ function DashboardContent() {
     resetZoneAlerts,
   } = useCycleAlerts({
     activeZones: ACTIVE_ZONES,
-    cyclesByZone,
-    liveZoneData,
+    cyclesByZone: dashboardCyclesByZone,
+    liveZoneData: IS_OPERATIONAL || IS_REPLAY_MODE ? liveZoneData : null,
     selectedZone,
   });
 
   // ====== Fetch sensor data from local data API ======
   useEffect(() => {
+    if (IS_REPLAY_MODE) {
+      setSensorError(null);
+      return;
+    }
+
     let isMounted = true;
 
     fetch("/api/sensors")
@@ -779,9 +902,19 @@ function DashboardContent() {
       .then((payload: SensorApiResponse) => {
         if (!isMounted) return;
 
-        const mapped = payload.data;
+        const mapped =
+          !IS_OPERATIONAL && SENSOR_LAST_RECORDED_AT
+            ? payload.data.filter(
+                (point) => point.time <= SENSOR_LAST_RECORDED_AT
+              )
+            : payload.data;
+        const finalReading = mapped.at(-1);
         setAllData(mapped);
-        setSensorMeta(payload.meta);
+        setSensorMeta({
+          ...payload.meta,
+          runtimeEnd: finalReading?.time ?? payload.meta.runtimeEnd,
+          records: mapped.length,
+        });
         setSensorError(null);
       })
       .catch((err) => {
@@ -929,6 +1062,7 @@ function DashboardContent() {
 
   const saveDailyProductionLog = (input: DailyProductionLogInput) => {
     if (
+      !IS_OPERATIONAL ||
       cycle.status !== "active" ||
       selectedZone === "ALL" ||
       input.date < cycle.startDate
@@ -1016,22 +1150,28 @@ function DashboardContent() {
     [selectedZone]
   );
   const hasStartedCycle = reportZones.some(
-    (zone) => cyclesByZone[zone].status !== "draft"
+    (zone) => dashboardCyclesByZone[zone].status !== "draft"
   );
   const hasActiveCycle = reportZones.some(
-    (zone) => cyclesByZone[zone].status === "active"
+    (zone) => dashboardCyclesByZone[zone].status === "active"
   );
   const reportDatasets = useMemo<Record<Zone, DataPoint[]>>(() => {
     return Object.fromEntries(
       ALL_ZONES.map((zone) => {
-        const zoneCycle = cyclesByZone[zone];
+        const zoneCycle = dashboardCyclesByZone[zone];
         return [
           zone,
-          allData
+          monitoringData
           .map((point, index) =>
-            getZonePoint(point, index, allData.length, zone)
+            getZonePoint(
+              point,
+              index,
+              IS_REPLAY_MODE ? replayData.length : monitoringData.length,
+              zone
+            )
           )
           .filter((point) => {
+            if (IS_REPLAY_MODE) return true;
             const pointDate = point.time.slice(0, 10);
             return (
               pointDate >= zoneCycle.startDate &&
@@ -1042,32 +1182,41 @@ function DashboardContent() {
         ];
       })
     ) as Record<Zone, DataPoint[]>;
-  }, [allData, cyclesByZone]);
+  }, [dashboardCyclesByZone, monitoringData, replayData.length]);
   const visibleSensorSeries = useMemo(
     () =>
       reportZones.map((zone) => ({
         zone,
-        cycle: cyclesByZone[zone],
+        cycle: dashboardCyclesByZone[zone],
         data: reportDatasets[zone],
       })),
-    [cyclesByZone, reportDatasets, reportZones]
+    [dashboardCyclesByZone, reportDatasets, reportZones]
   );
   const reportZone: Zone = reportZones[0] ?? "A";
   const reportDataset = reportDatasets[reportZone];
   const productionReportZones = useMemo(
     () =>
       reportZones.filter(
-        (zone) => cyclesByZone[zone].status !== "draft"
+        (zone) => dashboardCyclesByZone[zone].status !== "draft"
       ),
-    [cyclesByZone, reportZones]
+    [dashboardCyclesByZone, reportZones]
   );
   const productionReportZone = productionReportZones[0] ?? reportZone;
   const currentProductionByZone = useMemo<Record<Zone, HistoricalProductionData>>(() => {
     return Object.fromEntries(
       ALL_ZONES.map((zone) => {
-        const zoneCycle = cyclesByZone[zone];
+        const zoneCycle = dashboardCyclesByZone[zone];
+        if (IS_REPLAY_MODE && overviewReplayCycle) {
+          return [
+            zone,
+            sliceReplayProduction(
+              overviewReplayCycle.production,
+              replayCycleDay
+            ),
+          ];
+        }
         const mortalityByDate = new Map<string, number>();
-        cycleMortality
+        dashboardMortality
           .filter((entry) => entry.zone === zone)
           .forEach((entry) => {
             mortalityByDate.set(
@@ -1089,7 +1238,7 @@ function DashboardContent() {
               count,
             }))
             .sort((left, right) => left.day - right.day),
-          feedWater: cycleConsumptions
+          feedWater: dashboardConsumptions
             .filter((entry) => entry.zone === zone)
             .map((entry) => ({
               day: dateToDayNumber(entry.date, zoneCycle.startDate),
@@ -1098,7 +1247,7 @@ function DashboardContent() {
               waterLPerBird: entry.waterL,
             }))
             .sort((left, right) => left.day - right.day),
-          weights: cycleWeights
+          weights: dashboardWeights
             .filter((entry) => entry.zone === zone)
             .map((entry) => ({
               day: entry.day,
@@ -1112,10 +1261,12 @@ function DashboardContent() {
       })
     ) as Record<Zone, HistoricalProductionData>;
   }, [
-    cycleConsumptions,
-    cycleMortality,
-    cycleWeights,
-    cyclesByZone,
+    dashboardConsumptions,
+    dashboardCyclesByZone,
+    dashboardMortality,
+    dashboardWeights,
+    overviewReplayCycle,
+    replayCycleDay,
   ]);
   const currentProductionSeries = useMemo<ProductionPerformanceSeries[]>(
     () =>
@@ -1134,10 +1285,10 @@ function DashboardContent() {
         ALL_ZONES.map((zone) => [
           zone,
           calculateHarvestSummary({
-            cycle: cyclesByZone[zone],
-            mortality: cycleMortality,
-            consumptions: cycleConsumptions,
-            weights: cycleWeights,
+            cycle: dashboardCyclesByZone[zone],
+            mortality: dashboardMortality,
+            consumptions: dashboardConsumptions,
+            weights: dashboardWeights,
             sensorData: reportDatasets[zone],
             alerts: cycleAlerts.filter((entry) => entry.zone === zone),
             zone,
@@ -1146,10 +1297,10 @@ function DashboardContent() {
       ) as Record<Zone, HarvestSummary>,
     [
       cycleAlerts,
-      cycleConsumptions,
-      cycleMortality,
-      cycleWeights,
-      cyclesByZone,
+      dashboardConsumptions,
+      dashboardCyclesByZone,
+      dashboardMortality,
+      dashboardWeights,
       reportDatasets,
     ]
   );
@@ -1173,18 +1324,19 @@ function DashboardContent() {
   const currentPredictionInputs = useMemo<CurrentCyclePredictionInput[]>(
     () =>
       reportZones
-        .filter((zone) => cyclesByZone[zone].status === "active")
+        .filter((zone) => dashboardCyclesByZone[zone].status === "active")
         .map((zone) => ({
           zone,
-          cycle: cyclesByZone[zone],
+          cycle: dashboardCyclesByZone[zone],
           summary: harvestSummariesByZone[zone],
           sensorData: reportDatasets[zone],
         })),
-    [cyclesByZone, harvestSummariesByZone, reportDatasets, reportZones]
+    [dashboardCyclesByZone, harvestSummariesByZone, reportDatasets, reportZones]
   );
 
   const handleCycleChange = (changes: ProductionCycle) => {
-    if (selectedZone === "ALL" || cycle.status !== "active") return;
+    if (!IS_OPERATIONAL || selectedZone === "ALL" || cycle.status !== "active")
+      return;
     const zone = selectedZone;
     setCycles((current) => ({
       ...current,
@@ -1196,7 +1348,7 @@ function DashboardContent() {
   };
 
   const handleStartCycle = (input: StartCycleInput) => {
-    if (selectedZone === "ALL") return;
+    if (!IS_OPERATIONAL || selectedZone === "ALL") return;
     const zone = selectedZone;
     const cycleId = input.id.trim();
     if (!cycleId) return;
@@ -1220,7 +1372,8 @@ function DashboardContent() {
   };
 
   const handleCompleteCycle = (input: CompleteCycleInput) => {
-    if (selectedZone === "ALL" || cycle.status !== "active") return;
+    if (!IS_OPERATIONAL || selectedZone === "ALL" || cycle.status !== "active")
+      return;
     const zone = selectedZone;
     const completedCycle = completeProductionCycle(cycle, input);
     const completedSummary = {
@@ -1252,7 +1405,8 @@ function DashboardContent() {
   };
 
   const handleResetCycle = () => {
-    if (selectedZone === "ALL" || cycle.status !== "active") return;
+    if (!IS_OPERATIONAL || selectedZone === "ALL" || cycle.status !== "active")
+      return;
 
     const zone = selectedZone;
     const cycleId = cycle.id;
@@ -1283,6 +1437,7 @@ function DashboardContent() {
 
   const handleReopenCycle = (reason: string) => {
     if (
+      !IS_OPERATIONAL ||
       selectedZone === "ALL" ||
       cycle.status !== "completed" ||
       !reason.trim()
@@ -1357,21 +1512,107 @@ function DashboardContent() {
           activeZones={ACTIVE_ZONES}
           isSingleZone={IS_SINGLE_ZONE}
           cycle={cycle}
-          cyclesByZone={cyclesByZone}
+          cyclesByZone={dashboardCyclesByZone}
           reportZones={reportZones}
           harvestSummariesByZone={harvestSummariesByZone}
           cycleRiskAssessmentsByZone={cycleRiskAssessmentsByZone}
           latestTime={latestSafe.time}
-          refreshIntervalMs={REALTIME_INTERVAL_MS}
+          refreshIntervalMs={IS_REPLAY_MODE ? REPLAY_INTERVAL_MS : REALTIME_INTERVAL_MS}
           alerts={visibleAlerts}
           soundEnabled={soundEnabled}
           onToggleSound={toggleSound}
           onAcknowledge={acknowledgeAlert}
+          operationalStatus={IS_REPLAY_MODE ? "replay" : OPERATIONAL_STATUS}
         />
+      }
+      globalControls={
+        IS_REPLAY_MODE && overviewReplayCycle && replayPoint ? (
+          <section
+            aria-label="Replay data monitoring controls"
+            className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-white p-5 shadow-sm"
+          >
+            <div className="flex flex-col gap-1 lg:flex-row lg:items-end lg:justify-between lg:gap-6">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-700">
+                  Replay Data Monitoring
+                </div>
+                <h2 className="mt-1 text-2xl font-semibold text-slate-950">
+                  Historical Monitoring Replay
+                </h2>
+              </div>
+              <p className="max-w-2xl text-sm text-slate-600 lg:text-right">
+                Values, CCTV, trends, production, and AI insight follow the
+                selected replay timestamp across every dashboard tab.
+              </p>
+            </div>
+
+            <div className="mt-4 rounded-xl border border-violet-200 bg-white/90 p-3">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsReplayPlaying((current) => !current)}
+                    className="min-w-24 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700"
+                  >
+                    {isReplayPlaying ? "Pause replay" : "Play replay"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsReplayPlaying(false);
+                      setReplayIndex(0);
+                    }}
+                    className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-50"
+                  >
+                    Restart
+                  </button>
+                </div>
+                <input
+                  type="range"
+                  aria-label="Global dashboard replay position"
+                  min={0}
+                  max={replayMaximumIndex}
+                  value={replayIndex}
+                  onChange={(event) => {
+                    setIsReplayPlaying(false);
+                    setReplayIndex(Number(event.target.value));
+                  }}
+                  className="min-w-0 flex-1 accent-violet-600"
+                />
+                <label className="flex shrink-0 items-center gap-2 text-sm text-slate-600">
+                  Speed
+                  <select
+                    value={replaySpeed}
+                    onChange={(event) =>
+                      setReplaySpeed(Number(event.target.value))
+                    }
+                    className="rounded-lg border border-violet-200 bg-white px-2 py-1.5 font-semibold text-slate-800"
+                  >
+                    <option value={1}>1×</option>
+                    <option value={4}>4×</option>
+                    <option value={12}>12×</option>
+                  </select>
+                </label>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                <span>{overviewReplayCycle.label}</span>
+                <span className="rounded-full bg-violet-100 px-2.5 py-1 font-semibold text-violet-700">
+                  Cycle Day {replayCycleDay} of {cycle.targetHarvestDay}
+                </span>
+                <span className="font-semibold text-violet-700">
+                  Replay timestamp: {replayPoint.time}
+                </span>
+                <span>
+                  {replayIndex + 1} / {replayData.length} readings
+                </span>
+              </div>
+            </div>
+          </section>
+        ) : null
       }
     >
 
-      {latestToast && (
+      {(IS_OPERATIONAL || IS_REPLAY_MODE) && latestToast && (
         <div className={`fixed top-24 right-6 z-[80] max-w-sm rounded-2xl border shadow-2xl p-4 ${latestToast.severity === "critical" ? "bg-red-50 border-red-300" : "bg-amber-50 border-amber-300"}`}>
           <div className="font-semibold">⚠️ {latestToast.label} alert</div>
           <div className="text-sm mt-1">{latestToast.message}</div>
@@ -1382,8 +1623,9 @@ function DashboardContent() {
       <DashboardTabPanel>
       {activeTab === "overview" && (
         <>
-      <section className="rounded-2xl border border-blue-100 bg-gradient-to-r from-blue-50 to-white p-5">
-        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
+      {!IS_REPLAY_MODE && (
+      <section className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-white p-5">
+        <div className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-700">
           Current Data Monitoring
         </div>
         <h2 className="mt-1 text-2xl font-semibold text-slate-950">
@@ -1409,6 +1651,7 @@ function DashboardContent() {
             : "Realtime CCTV, sensor readings, production records, cycle progress, system health, and on-demand AI summary for the cycle in progress."}
         </p>
       </section>
+      )}
 
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(420px,2fr)]">
         {/* CCTV Section */}
@@ -1422,6 +1665,14 @@ function DashboardContent() {
                 <CameraFeed
                   zone={selectedZone}
                   available={selectedZone === "A"}
+                  disconnected={false}
+                  replay={IS_REPLAY_MODE}
+                  replayPlaying={isReplayPlaying}
+                  replayProgress={
+                    replayMaximumIndex > 0
+                      ? replayIndex / replayMaximumIndex
+                      : 0
+                  }
                   // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
                   dummySrc="/video/raw_video_dataset_seg1.mp4"
                   className="h-full w-full object-cover"
@@ -1445,6 +1696,14 @@ function DashboardContent() {
                     <CameraFeed
                       zone={zone}
                       available={zone === "A"}
+                      disconnected={false}
+                      replay={IS_REPLAY_MODE}
+                      replayPlaying={isReplayPlaying}
+                      replayProgress={
+                        replayMaximumIndex > 0
+                          ? replayIndex / replayMaximumIndex
+                          : 0
+                      }
                       // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
                       dummySrc="/video/raw_video_dataset_seg1.mp4"
                       className="h-full w-full object-cover"
@@ -1463,7 +1722,7 @@ function DashboardContent() {
           {/* Live Readings */}
           <section>
             <h2 className="mb-4 text-2xl font-semibold">
-              Realtime Readings – {cycle.houseName}
+              {IS_REPLAY_MODE ? "Replay Sensor Readings" : "Realtime Readings"} – {cycle.houseName}
             </h2>
 
             {/* ================= ALL ZONES ================= */}
@@ -1527,30 +1786,60 @@ function DashboardContent() {
             {/* ================= SINGLE ZONE ================= */}
             {selectedZone !== "ALL" && (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                {buildCards(latestSafe, selectedZone).map((item, idx) => (
-                  <CardItem key={idx} item={item} />
-                ))}
+                {IS_OPERATIONAL || IS_REPLAY_MODE
+                  ? buildCards(latestSafe, selectedZone).map((item, idx) => (
+                      <CardItem key={idx} item={item} />
+                    ))
+                  : INACTIVE_SENSOR_CARDS.map((item) => (
+                      <div
+                        key={item.label}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
+                      >
+                        <div className="mb-2 text-3xl grayscale">{item.icon}</div>
+                        <p className="text-sm text-slate-600">
+                          {item.label} ({selectedZone})
+                        </p>
+                        <p className="text-xl font-bold text-slate-500">—</p>
+                        <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Inactive
+                        </p>
+                      </div>
+                    ))}
               </div>
             )}
           </section>
 
           {/* System Health */}
           <section>
-            <h2 className="mb-3 text-xl font-semibold">System Health & Uptime</h2>
+            <h2 className="mb-3 text-xl font-semibold">
+              {IS_REPLAY_MODE ? "System & Replay Status" : "System Health & Uptime"}
+            </h2>
             <div className="grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-4 text-sm shadow sm:grid-cols-2">
               <div>
-                📡 Status: {sensorError ? "Error" : allData.length ? "Online" : "Starting…"}
+                📡 Status: {IS_REPLAY_MODE
+                  ? "Replay Mode"
+                  : sensorError
+                    ? "Error"
+                    : allData.length
+                      ? "Online"
+                      : "Starting…"}
               </div>
-              <div>🕒 Latest Reading: {latestSafe.time}</div>
               <div>
-                📅 Data Window: {sensorMeta
+                🕒 {IS_REPLAY_MODE ? "Replay Timestamp" : "Latest Reading"}: {latestSafe.time}
+              </div>
+              <div>
+                📅 Data Window: {IS_REPLAY_MODE && overviewReplayCycle
+                  ? `${overviewReplayCycle.startDate} to ${overviewReplayCycle.endDate}`
+                  : sensorMeta
                   ? `${sensorMeta.runtimeStart} to ${sensorMeta.runtimeEnd}`
                   : "-"}
               </div>
-              <div>📦 Records: {sensorMeta?.records ?? allData.length}</div>
-              <div>🧪 Data Source: Environmental Sensors</div>
               <div>
-                ✅ Completeness: {harvestSummary.sensorHealth.completeness.toFixed(1)}%
+                📦 Records: {IS_REPLAY_MODE ? `${replayIndex + 1} / ${replayData.length}` : sensorMeta?.records ?? allData.length}
+              </div>
+              <div>🧪 Data Source: {IS_REPLAY_MODE ? "Stored Cycle Sensors" : "Environmental Sensors"}</div>
+              <div>
+                ✅ Monitoring: {IS_REPLAY_MODE ? "Replay Data" : "Active"}
               </div>
               {sensorError && (
                 <div className="text-sm text-red-600 sm:col-span-2">
@@ -1559,35 +1848,59 @@ function DashboardContent() {
               )}
             </div>
           </section>
+
         </div>
       </div>
+      {IS_REPLAY_MODE && replayPoint && (
+        <OverviewReplayInsight
+          point={latestSafe}
+          recentPoints={replayRecentPoints}
+          cycle={cycle}
+          summary={harvestSummary}
+          activeAlertCount={visibleAlerts.filter(
+            (entry) => entry.status === "active"
+          ).length}
+          zoneLabel={selectedZone === "ALL" ? "All Zones" : `Zone ${selectedZone}`}
+          onGenerateStart={() => setIsReplayPlaying(false)}
+        />
+      )}
         </>
       )}
 
       {activeTab === "environment" && (
-        <CurrentCycleSensorTrends series={visibleSensorSeries} />
+        <CurrentCycleSensorTrends
+          series={visibleSensorSeries}
+          disconnected={!IS_OPERATIONAL && !IS_REPLAY_MODE}
+          replay={IS_REPLAY_MODE}
+        />
       )}
 
-      {activeTab === "production" && (selectedZone !== "ALL" ? (
-        <ProductionCyclePanel
-          key={`${cycle.zone}:${cycle.id}`}
-          cycle={cycle}
-          summary={harvestSummary}
-          onChange={handleCycleChange}
-          onStart={handleStartCycle}
-          onReset={handleResetCycle}
-          onComplete={handleCompleteCycle}
-          onReopen={handleReopenCycle}
-          onDownload={generatePDFReport}
-          isDownloading={isDownloadingPDF}
-        />
-      ) : (
-        <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
-          {hasActiveCycle
-            ? "Multi-zone sensor and production comparisons are shown below. Select a specific zone to manage its cycle."
-            : "Environmental sensors remain active across all three zones. Select a specific zone when you are ready to start its production cycle."}
-        </section>
-      ))}
+      {activeTab === "production" && (
+        selectedZone !== "ALL" ? (
+          <ProductionCyclePanel
+            key={`${cycle.zone}:${cycle.id}`}
+            cycle={cycle}
+            summary={harvestSummary}
+            onChange={handleCycleChange}
+            onStart={handleStartCycle}
+            onReset={handleResetCycle}
+            onComplete={handleCompleteCycle}
+            onReopen={handleReopenCycle}
+            onDownload={generatePDFReport}
+            isDownloading={isDownloadingPDF}
+            readOnly={!IS_OPERATIONAL}
+            replay={IS_REPLAY_MODE}
+          />
+        ) : (
+          <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
+            {IS_REPLAY_MODE
+              ? `All zones are following Batch ${overviewReplayCycle?.production.sourceSummary?.batch ?? 7} replay at Day ${replayCycleDay}. Select a zone for its synchronized cycle view.`
+              : hasActiveCycle
+              ? "Multi-zone sensor and production comparisons are shown below. Select a specific zone to manage its cycle."
+              : "Environmental sensors remain active across all three zones. Select a specific zone when you are ready to start its production cycle."}
+          </section>
+        )
+      )}
 
       {/* ================= HISTORICAL TREND ANALYSIS ================= */}
       {activeTab === "history" && (
@@ -1713,7 +2026,9 @@ function DashboardContent() {
                       {selectedHistoricalCycle?.id ?? "Completed cycle"}
                     </span>
                     <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
-                      {chartData.length} stored readings
+                      {chartData.length > 0
+                        ? `${chartData.length} stored readings`
+                        : "Sensor data not provided"}
                     </span>
                   </div>
                 </div>
@@ -1745,7 +2060,8 @@ function DashboardContent() {
                     key={historicalCycle.key}
                     value={historicalCycle.key}
                   >
-                    {historicalCycle.label} · {historicalCycle.id} · {historicalCycle.startDate} – {historicalCycle.endDate}
+                    {historicalCycle.label} · {historicalCycle.id} ·{" "}
+                    {historicalCycle.startDate} – {historicalCycle.endDate}
                   </option>
                 ))}
               </select>
@@ -1758,14 +2074,45 @@ function DashboardContent() {
           {selectedHistoricalCycle && (
             <div className="mt-4 grid grid-cols-2 gap-3 border-t border-gray-100 pt-4 sm:grid-cols-4 xl:grid-cols-9">
               {[
-                ["Period", `${selectedHistoricalCycle.startDate} – ${selectedHistoricalCycle.endDate}`],
+                [
+                  "Period",
+                  `${selectedHistoricalCycle.startDate} – ${selectedHistoricalCycle.endDate}`,
+                ],
                 ["Harvest", `Day ${selectedHistoricalCycle.harvestDay}`],
-                ["Readings", selectedHistoricalCycle.data.length],
-                ["Avg temp", `${selectedHistoricalCycle.averages.temp.toFixed(2)} °C`],
-                ["Avg humidity", `${selectedHistoricalCycle.averages.humidity.toFixed(2)}%`],
-                ["Avg CO₂", `${selectedHistoricalCycle.averages.co2.toFixed(0)} ppm`],
-                ["Avg NH₃", `${selectedHistoricalCycle.averages.nh3.toFixed(2)} ppm`],
-                ["Avg PM2.5", `${selectedHistoricalCycle.averages.pm25.toFixed(2)} µg/m³`],
+                [
+                  "Readings",
+                  selectedHistoricalCycle.data.length || "Not provided",
+                ],
+                [
+                  "Avg temp",
+                  selectedHistoricalCycle.data.length
+                    ? `${selectedHistoricalCycle.averages.temp.toFixed(2)} °C`
+                    : "Not provided",
+                ],
+                [
+                  "Avg humidity",
+                  selectedHistoricalCycle.data.length
+                    ? `${selectedHistoricalCycle.averages.humidity.toFixed(2)}%`
+                    : "Not provided",
+                ],
+                [
+                  "Avg CO₂",
+                  selectedHistoricalCycle.data.length
+                    ? `${selectedHistoricalCycle.averages.co2.toFixed(0)} ppm`
+                    : "Not provided",
+                ],
+                [
+                  "Avg NH₃",
+                  selectedHistoricalCycle.data.length
+                    ? `${selectedHistoricalCycle.averages.nh3.toFixed(2)} ppm`
+                    : "Not provided",
+                ],
+                [
+                  "Avg PM2.5",
+                  selectedHistoricalCycle.data.length
+                    ? `${selectedHistoricalCycle.averages.pm25.toFixed(2)} µg/m³`
+                    : "Not provided",
+                ],
                 [
                   "Source",
                   selectedHistoricalCycle.sourceLabel ??
@@ -1820,6 +2167,8 @@ function DashboardContent() {
           ) : null}
         </div>
 
+        {selectedHistoricalCycle?.data.length ? (
+          <>
         {/* Controls */}
         <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -2012,10 +2361,24 @@ function DashboardContent() {
             )}
           </div>
         )}
+          </>
+        ) : (
+          <div className="rounded-2xl border border-dashed border-violet-200 bg-violet-50/50 p-6 text-center">
+            <h3 className="font-semibold text-slate-900">
+              Environmental sensor data not provided
+            </h3>
+            <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+              The source summary contains production results for this batch,
+              but no stored temperature, humidity, CO₂, NH₃, or PM2.5
+              readings. The production performance remains available below.
+            </p>
+          </div>
+        )}
             </div>
       </section>
 
       {/* ======================= Historical Correlation Insight ======================= */}
+      {selectedHistoricalCycle && selectedHistoricalCycle.data.length > 0 && (
       <section className="order-2 overflow-hidden rounded-2xl border border-violet-100 bg-white shadow">
         <div className="border-b border-violet-100 bg-gradient-to-r from-violet-50 via-fuchsia-50/50 to-white p-5">
           <div className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-700">
@@ -2268,6 +2631,7 @@ function DashboardContent() {
           </article>
         </div>
           </section>
+      )}
         </>
       )}
 
@@ -2311,18 +2675,18 @@ function DashboardContent() {
           title="Current Production Performance"
           description={
             productionReportZones.length === 1
-              ? `Mortality, feed, water, and body-weight records for Zone ${productionReportZone} · ${cyclesByZone[productionReportZone].id}.`
+              ? `Mortality, feed, water, and body-weight records for Zone ${productionReportZone} · ${dashboardCyclesByZone[productionReportZone].id}.`
               : `Each zone uses its own active cycle: ${productionReportZones
                   .map(
                     (zone) =>
-                      `Zone ${zone} ${cyclesByZone[zone].id} (Day ${harvestSummariesByZone[zone].cycleDay})`
+                      `Zone ${zone} ${dashboardCyclesByZone[zone].id} (Day ${harvestSummariesByZone[zone].cycleDay})`
                   )
                   .join(" · ")}.`
           }
           periodLabel={
             productionReportZones.length === 1
-              ? `${cyclesByZone[productionReportZone].startDate} – ${
-                  cyclesByZone[productionReportZone].actualHarvestDate ??
+              ? `${dashboardCyclesByZone[productionReportZone].startDate} – ${
+                  dashboardCyclesByZone[productionReportZone].actualHarvestDate ??
                   reportDatasets[productionReportZone]
                     .at(-1)
                     ?.time.slice(0, 10) ??
@@ -2333,7 +2697,7 @@ function DashboardContent() {
           series={currentProductionSeries}
         />
 
-        {!isAllZone && cycle.status === "active" && (
+        {IS_OPERATIONAL && !isAllZone && cycle.status === "active" && (
           <DailyProductionLog
             cycleId={cycle.id}
             startDate={cycle.startDate}
@@ -2360,10 +2724,11 @@ function DashboardContent() {
         </section>
       )}
 
-      {hasActiveCycle && (
+      {(IS_OPERATIONAL || IS_REPLAY_MODE) && hasActiveCycle && (
         <CurrentCyclePrediction
           inputs={currentPredictionInputs}
           onReportAnalysisChange={handleCurrentReportAnalysisChange}
+          replay={IS_REPLAY_MODE}
         />
       )}
         </>

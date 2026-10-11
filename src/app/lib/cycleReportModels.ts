@@ -222,7 +222,7 @@ export function buildCurrentCycleReportModel({
         value: `${harvestSummary.totalWaterPerBirdL.toFixed(2)} L`,
       },
       {
-        label: "Estimated FCR",
+        label: "FCR",
         value: harvestSummary.fcr.toFixed(2),
       },
     ],
@@ -326,19 +326,25 @@ export function buildHistoricalCycleReportModel({
         value: formatOptional(production.totalWaterPerBirdL, 2, "L"),
       },
       {
-        label: "Estimated FCR",
+        label: "FCR",
         value: formatOptional(production.estimatedFcr, 2),
       },
     ],
-    sensorMetrics: baseline.metrics.map((metric) => ({
-      label: metric.label,
-      unit: metric.unit,
-      average: metric.average,
-      minimum: metric.minimum,
-      maximum: metric.maximum,
-      exceedanceLabel: `${metric.exceedanceCount.toLocaleString()} readings (${metric.exceedancePercent.toFixed(1)}%) outside ${metric.reviewLimit}`,
-    })),
-    sensorSummary: `${baseline.records.toLocaleString()} stored readings provide ${baseline.completeness.toFixed(1)}% expected coverage. ${baseline.readingsWithIssue.toLocaleString()} readings (${baseline.issueReadingPercent.toFixed(1)}%) were outside at least one review limit.`,
+    sensorMetrics:
+      historicalCycle.data.length > 0
+        ? baseline.metrics.map((metric) => ({
+            label: metric.label,
+            unit: metric.unit,
+            average: metric.average,
+            minimum: metric.minimum,
+            maximum: metric.maximum,
+            exceedanceLabel: `${metric.exceedanceCount.toLocaleString()} readings (${metric.exceedancePercent.toFixed(1)}%) outside ${metric.reviewLimit}`,
+          }))
+        : [],
+    sensorSummary:
+      historicalCycle.data.length > 0
+        ? `${baseline.records.toLocaleString()} stored readings provide ${baseline.completeness.toFixed(1)}% expected coverage. ${baseline.readingsWithIssue.toLocaleString()} readings (${baseline.issueReadingPercent.toFixed(1)}%) were outside at least one review limit.`
+        : "Environmental sensor readings were not provided in the source summary.",
     analysis,
   };
 }

@@ -4,6 +4,7 @@ export async function POST(req: Request) {
   try {
     const { context, prompt } = await req.json();
     const apiKey = process.env.OPENAI_API_KEY;
+    const model = process.env.OPENAI_MODEL?.trim() || "gpt-4o-mini";
 
     if (!apiKey) {
       return NextResponse.json(
@@ -12,7 +13,12 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!context || !prompt) {
+    if (
+      typeof context !== "string" ||
+      typeof prompt !== "string" ||
+      !context.trim() ||
+      !prompt.trim()
+    ) {
       return NextResponse.json(
         { error: "Insight context and prompt are required" },
         { status: 400 }
@@ -26,12 +32,12 @@ export async function POST(req: Request) {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model,
         messages: [
           {
             role: "system",
             content:
-              "You are a poultry-monitoring decision-support analyst. Use only the supplied context. Treat the AUTHORITATIVE THRESHOLD EVALUATION as fixed: never call an EXCEEDED value within threshold. Do not invent measurements, diagnose disease, or prescribe medication. Give practical operational checks, state uncertainty, and recommend qualified farm or veterinary review for unusual health findings.",
+              "You are a poultry-monitoring decision-support analyst reviewing historical replay data. Use only the supplied context. Treat every supplied threshold status as authoritative. Never describe replay data as live. Do not invent measurements, diagnose disease, or prescribe medication. Give practical operational checks, state uncertainty, and recommend qualified farm or veterinary review for unusual health findings.",
           },
           { role: "user", content: context + "\n\n" + prompt },
         ],
@@ -42,8 +48,26 @@ export async function POST(req: Request) {
     const json = await res.json();
 
     if (!res.ok) {
+      const providerCode = String(json.error?.code ?? "").toLowerCase();
+      const providerMessage = String(json.error?.message ?? "").toLowerCase();
+      const quotaUnavailable =
+        res.status === 429 ||
+        providerCode.includes("quota") ||
+        providerCode.includes("billing") ||
+        providerMessage.includes("credit") ||
+        providerMessage.includes("billing");
+
+      console.error("OpenAI insight request failed", {
+        status: res.status,
+        code: json.error?.code,
+        type: json.error?.type,
+      });
       return NextResponse.json(
-        { error: json.error?.message ?? "OpenAI request failed" },
+        {
+          error: quotaUnavailable
+            ? "AI service quota is unavailable for the configured account"
+            : "The AI service could not generate an insight at this time",
+        },
         { status: res.status }
       );
     }
@@ -57,7 +81,7 @@ export async function POST(req: Request) {
       );
     }
 
-    return NextResponse.json({ insight });
+    return NextResponse.json({ insight, model });
   } catch (error) {
     console.error("Failed to generate insight", error);
     return NextResponse.json(
