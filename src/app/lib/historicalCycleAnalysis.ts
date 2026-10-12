@@ -1,4 +1,5 @@
 import type { HistoricalCycle } from "./historicalCycles";
+import { SENSOR_ALERT_RULES } from "./alertRules";
 
 export type HistoricalAnalysisRisk = "Low" | "Moderate" | "High";
 
@@ -247,7 +248,13 @@ export function createHistoricalCycleAnalysis(
       (value) => value < 60 || value > 80
     ),
     metric("co2", "CO₂", "ppm", "≤ 1,200 ppm", (value) => value > 1200),
-    metric("nh3", "NH₃", "ppm", "≤ 5 ppm", (value) => value > 5),
+    metric(
+      "nh3",
+      "NH₃",
+      "ppm",
+      `< ${SENSOR_ALERT_RULES.nh3.threshold} ppm target`,
+      (value) => value >= SENSOR_ALERT_RULES.nh3.threshold
+    ),
     metric(
       "pm25",
       "PM2.5",
@@ -264,7 +271,7 @@ export function createHistoricalCycleAnalysis(
     if (key === "temp") return value > 32;
     if (key === "humidity") return value < 60 || value > 80;
     if (key === "co2") return value > 1200;
-    if (key === "nh3") return value > 5;
+    if (key === "nh3") return value >= SENSOR_ALERT_RULES.nh3.threshold;
     return value > 35;
   };
   const metricKeys: HistoricalMetricReview["key"][] = [

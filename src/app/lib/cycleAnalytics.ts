@@ -152,15 +152,25 @@ export function createDemoProductionCycle(): ProductionCycle {
 
 export function calculateSensorHealth(
   data: DataPoint[],
-  targetHarvestDay: number
+  targetHarvestDay: number,
+  expectedIntervalMinutes = 1
 ): SensorHealthSummary {
+  const normalizedIntervalMinutes = Math.max(1, expectedIntervalMinutes);
   const expectedRecords =
     data.length > 1
       ? Math.max(
           1,
-          Math.round((data.at(-1)!.ts - data[0].ts) / (60 * 1000)) + 1
+          Math.round(
+            (data.at(-1)!.ts - data[0].ts) /
+              (normalizedIntervalMinutes * 60 * 1000)
+          ) + 1
         )
-      : Math.max(1, targetHarvestDay * 24 * 60);
+      : Math.max(
+          1,
+          Math.round(
+            (targetHarvestDay * 24 * 60) / normalizedIntervalMinutes
+          )
+        );
   const receivedRecords = data.length;
   const completeness = Math.min(100, (receivedRecords / expectedRecords) * 100);
   const gaps = data
@@ -168,7 +178,8 @@ export function calculateSensorHealth(
     .map((point, index) => (point.ts - data[index].ts) / (60 * 60 * 1000));
   const largestGapHours = gaps.length ? Math.max(...gaps) : 0;
   const issueCount =
-    Number(completeness < 95) + Number(largestGapHours > 2.5 / 60);
+    Number(completeness < 95) +
+    Number(largestGapHours > (normalizedIntervalMinutes * 1.5) / 60);
 
   return {
     status: issueCount ? "Review Required" : "Healthy",
@@ -188,6 +199,7 @@ export function calculateHarvestSummary({
   sensorData,
   alerts,
   zone,
+  sensorIntervalMinutes = 1,
 }: {
   cycle: ProductionCycle;
   mortality: MortalityEntry[];
@@ -196,6 +208,7 @@ export function calculateHarvestSummary({
   sensorData: DataPoint[];
   alerts: AlertEvent[];
   zone: Zone;
+  sensorIntervalMinutes?: number;
 }): HarvestSummary {
   const houseMortality = mortality.filter((entry) => entry.zone === zone);
   const houseConsumptions = consumptions.filter((entry) => entry.zone === zone);
@@ -254,7 +267,11 @@ export function calculateHarvestSummary({
       ? (weightGainKg * 1000) / cycleDay
       : 0,
     alertCount: Math.max(alerts.length, countSensorAlertEpisodes(sensorData)),
-    sensorHealth: calculateSensorHealth(sensorData, cycleDay),
+    sensorHealth: calculateSensorHealth(
+      sensorData,
+      cycleDay,
+      sensorIntervalMinutes
+    ),
   };
 }
 

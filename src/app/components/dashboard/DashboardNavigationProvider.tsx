@@ -32,6 +32,11 @@ export const DASHBOARD_TABS = [
     label: "History & Reports",
     description: "Completed cycles and retrospective analysis",
   },
+  {
+    id: "research",
+    label: "Analysis",
+    description: "Original-cycle findings and evidence",
+  },
 ] as const;
 
 export type DashboardTab = (typeof DASHBOARD_TABS)[number]["id"];

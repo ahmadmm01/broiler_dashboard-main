@@ -130,7 +130,7 @@ export default function OverviewReplayInsight({
         thresholdStatus:
           value > rule.criticalThreshold
             ? "CRITICAL"
-            : value > rule.threshold
+            : value >= rule.threshold
               ? "EXCEEDED"
               : "WITHIN LIMIT",
         recentChange: Number((value - firstPoint[metric]).toFixed(2)),
@@ -176,7 +176,7 @@ export default function OverviewReplayInsight({
         body: JSON.stringify({
           context,
           prompt:
-            "Create a concise monitoring insight for the operator. Return exactly three sections titled Situation, Evidence, and Recommended checks. Do not add an overall title. Do not use Markdown heading or bold markers. Use short bullet points for Evidence and Recommended checks. Prioritize the most important environmental and production evidence, explain uncertainty, and do not refer to any data that is not supplied. Clearly call this replay data, not a live assessment.",
+            "Create a concise monitoring insight for the operator. Return exactly three sections titled Situation, Evidence, and Recommended checks. Do not add an overall title. Do not use Markdown heading or bold markers. Use short bullet points for Evidence and Recommended checks. Prioritize the most important environmental and production evidence, explain uncertainty, and do not refer to any data that is not supplied. Do not describe the selected historical monitoring snapshot as live data, and focus on its conditions without repeating playback-mode labels.",
         }),
       });
       const payload = (await response.json()) as {
@@ -215,13 +215,10 @@ export default function OverviewReplayInsight({
             <h2 className="text-2xl font-semibold text-slate-950">
               AI Monitoring Insight
             </h2>
-            <span className="rounded-full border border-violet-300 bg-white px-2.5 py-1 text-xs font-semibold text-violet-800">
-              Replay Data
-            </span>
           </div>
           <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-600">
             Generate an on-demand interpretation of the sensor, alert, and
-            production snapshot at the current replay timestamp. Nothing is
+            production snapshot at the selected monitoring timestamp. Nothing is
             generated automatically.
           </p>
         </div>
@@ -254,7 +251,7 @@ export default function OverviewReplayInsight({
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
               <span className="font-semibold text-violet-700">
-                Generated for {generated.zoneLabel} · Replay Day {generated.cycleDay}
+                Generated for {generated.zoneLabel} · Day {generated.cycleDay}
                 {" · "}{generated.replayTimestamp}
               </span>
               <span>
@@ -263,7 +260,7 @@ export default function OverviewReplayInsight({
             </div>
             {isOutdated && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                The replay has advanced since this insight was generated. The
+                The monitoring timeline has advanced since this insight was generated. The
                 result below remains tied to its original snapshot.
               </div>
             )}
@@ -311,14 +308,14 @@ export default function OverviewReplayInsight({
               No AI insight has been generated
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
-              Current snapshot: {zoneLabel}, Replay Day {summary.cycleDay}, {point.time}.
+              Current snapshot: {zoneLabel}, Day {summary.cycleDay}, {point.time}.
               Click Generate AI Insight when you want this snapshot analyzed.
             </p>
           </div>
         )}
 
         <p className="mt-4 text-xs leading-5 text-slate-500">
-          This is decision support generated from historical replay data. It is
+          This is decision support generated from the selected monitoring data. It is
           not a live sensor assessment, disease diagnosis, or medication advice.
         </p>
       </div>

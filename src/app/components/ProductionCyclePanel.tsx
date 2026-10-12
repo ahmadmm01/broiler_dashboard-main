@@ -167,7 +167,7 @@ export default function ProductionCyclePanel({
             <span
               className={`rounded-full border px-2.5 py-1 text-xs ${
                 replay
-                  ? "border-violet-300 bg-violet-100 text-violet-800"
+                  ? "border-blue-200 bg-blue-50 text-blue-700"
                   : readOnly
                   ? "border-slate-300 bg-slate-100 text-slate-700"
                   : isDraft
@@ -178,7 +178,7 @@ export default function ProductionCyclePanel({
               }`}
             >
               {replay
-                ? `Replay active · Day ${summary.cycleDay} of ${cycle.targetHarvestDay}`
+                ? `Active · Day ${summary.cycleDay} of ${cycle.targetHarvestDay}`
                 : readOnly
                 ? "Not running"
                 : isDraft
@@ -192,20 +192,20 @@ export default function ProductionCyclePanel({
           </div>
           <p className="mt-1 text-sm text-gray-500">
             {replay
-              ? "Cycle status and production records advance with the shared dashboard replay. Lifecycle actions are locked because this is stored data."
+              ? "Cycle status and production records follow the selected monitoring timestamp."
               : readOnly
               ? "Production data remains available for review. Cycle actions are disabled while monitoring is inactive."
               : "Start, maintain, complete, and audit one production cycle without mixing its records with another flock."}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
-          {readOnly && (
+          {readOnly && !replay && (
             <button
               type="button"
               disabled
               className="cursor-not-allowed rounded-lg bg-slate-200 px-4 py-2 font-semibold text-slate-500"
             >
-              {replay ? "Replay Data · Actions Locked" : "Cycle Unavailable"}
+              Cycle Unavailable
             </button>
           )}
           {!readOnly && isDraft && !isStarting && (
@@ -294,7 +294,7 @@ export default function ProductionCyclePanel({
           [
             "Lifecycle status",
             replay
-              ? "REPLAY ACTIVE"
+              ? "ACTIVE"
               : readOnly
                 ? "NOT RUNNING"
                 : cycle.status.toUpperCase(),
@@ -343,7 +343,7 @@ export default function ProductionCyclePanel({
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide text-blue-600">
                 {replay
-                  ? "Replay cycle progress"
+                  ? "Current cycle progress"
                   : readOnly
                     ? "Last recorded cycle progress"
                     : "Current cycle progress"}
@@ -863,14 +863,14 @@ export default function ProductionCyclePanel({
 
       <div
         className={`mt-4 rounded-xl border p-3 text-sm ${
-          readOnly
+          readOnly && !replay
             ? "border-slate-200 bg-slate-100 text-slate-700"
             : summary.sensorHealth.status === "Healthy"
             ? "border-green-200 bg-green-50 text-green-900"
             : "border-amber-200 bg-amber-50 text-amber-900"
         }`}
       >
-        {readOnly ? (
+        {readOnly && !replay ? (
           <strong>Sensor monitoring: Inactive.</strong>
         ) : (
           <>

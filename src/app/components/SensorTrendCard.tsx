@@ -30,7 +30,7 @@ export default function SensorTrendCard({
 }) {
   return (
     <article
-      className={`rounded-2xl border border-slate-200 bg-slate-50/60 p-4 ${
+      className={`self-start rounded-2xl border border-slate-200 bg-slate-50/60 p-4 ${
         emphasized ? "lg:col-span-2 2xl:col-span-2" : ""
       }`}
     >
@@ -41,14 +41,14 @@ export default function SensorTrendCard({
       </div>
 
       <div
-        className={`mb-4 grid gap-2 ${
+        className={`mb-4 grid items-start gap-2 ${
           summaries.length > 1 ? "sm:grid-cols-3" : "grid-cols-1"
         }`}
       >
         {summaries.map((summary) => (
           <div
             key={summary.id}
-            className="rounded-xl border border-slate-200 bg-white p-3"
+            className="self-start rounded-xl border border-slate-200 bg-white p-3"
             style={{
               borderLeftColor: summary.color,
               borderLeftWidth: 4,

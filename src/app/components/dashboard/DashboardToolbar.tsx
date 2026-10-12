@@ -124,7 +124,7 @@ export default function DashboardToolbar({
             {operationalStatus === "inactive"
               ? "Monitoring Inactive"
               : operationalStatus === "replay"
-                ? `Replay Data · ${refreshIntervalMs / 1000}s step`
+                ? `Monitoring · ${refreshIntervalMs / 1000}s update`
               : `Live Monitoring · ${refreshIntervalMs / 1000}s refresh`}
           </span>
 
@@ -140,7 +140,7 @@ export default function DashboardToolbar({
                 {operationalStatus === "inactive"
                   ? "Cycle not running"
                   : operationalStatus === "replay"
-                    ? `Replay active · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`
+                    ? `Active · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`
                   : zoneCycle.status === "draft"
                   ? "Not started"
                   : zoneCycle.status === "completed"

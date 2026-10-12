@@ -50,9 +50,9 @@ function buildReportActions(
   if (summary.co2.max > 1200) {
     actions.push("Increase air exchange because CO₂ exceeded 1200 ppm.");
   }
-  if (summary.nh3.max > 5) {
+  if (summary.nh3.max >= SENSOR_ALERT_RULES.nh3.threshold) {
     actions.push(
-      "Inspect litter condition and airflow because NH₃ exceeded 5 ppm."
+      `Inspect litter condition and airflow because NH₃ reached the ${SENSOR_ALERT_RULES.nh3.threshold} ppm warning level.`
     );
   }
   if (summary.pm25.max > 35) {
@@ -160,7 +160,7 @@ export function buildCurrentCycleReportModel({
     const values = sensorData.map((point) => point[metric]);
     const rule = SENSOR_ALERT_RULES[metric];
     const exceedances = values.filter(
-      (value) => value > rule.threshold
+      (value) => value >= rule.threshold
     ).length;
 
     return {

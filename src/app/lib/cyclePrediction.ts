@@ -1,4 +1,5 @@
 import { standardBroilerWeight } from "./broilerStandard";
+import { SENSOR_ALERT_RULES } from "./alertRules";
 import type { HarvestSummary } from "./cycleAnalytics";
 import { summarizeData } from "./sensorData";
 import type { DataPoint, ProductionCycle, Zone } from "./types";
@@ -171,7 +172,7 @@ export function assessCurrentCycleRisk({
       score: 1,
     });
   }
-  if (nh3Peak > 5) {
+  if (nh3Peak >= SENSOR_ALERT_RULES.nh3.threshold) {
     factors.push({
       key: "nh3",
       label: "NH₃ peak",
@@ -338,7 +339,10 @@ export function createCurrentCyclePrediction({
     monitoringFocus.add("Temperature peaks and bird heat-stress behaviour");
   }
 
-  if (co2Peak > 1200 || nh3Peak > 5) {
+  if (
+    co2Peak > 1200 ||
+    nh3Peak >= SENSOR_ALERT_RULES.nh3.threshold
+  ) {
     keyRisks.push({
       title: "Ventilation or litter air-quality risk",
       evidence: `Peak CO₂ was ${co2Peak.toFixed(0)} ppm and peak NH₃ was ${nh3Peak.toFixed(2)} ppm.`,

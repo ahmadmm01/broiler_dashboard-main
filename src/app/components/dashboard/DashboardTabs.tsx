@@ -22,7 +22,7 @@ export default function DashboardTabs() {
       <div
         role="tablist"
         aria-label="Dashboard views"
-        className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm sm:grid-cols-4"
+        className="grid grid-cols-2 gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm sm:grid-cols-3 xl:grid-cols-5"
       >
         {DASHBOARD_TABS.map((tab, index) => {
           const isActive = tab.id === activeTab;

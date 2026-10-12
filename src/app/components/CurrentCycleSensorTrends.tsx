@@ -189,7 +189,7 @@ export default function CurrentCycleSensorTrends({
                 minimum: values.length ? Math.min(...values) : 0,
                 maximum: values.length ? Math.max(...values) : 0,
                 latest: values.at(-1) ?? 0,
-                exceedances: values.filter((value) => value > rule.threshold)
+                exceedances: values.filter((value) => value >= rule.threshold)
                   .length,
               },
             ];
@@ -250,7 +250,7 @@ export default function CurrentCycleSensorTrends({
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-700">
               {replay
-                ? "Replay data"
+                ? "Monitoring data"
                 : disconnected
                 ? "Environmental data"
                 : hasActiveCycle
@@ -259,7 +259,7 @@ export default function CurrentCycleSensorTrends({
             </div>
             <h2 className="mt-1 text-2xl font-semibold text-slate-950">
               {replay
-                ? "Sensor Replay Trends"
+                ? "Sensor Trends"
                 : disconnected
                 ? "Last Recorded Sensor Trends"
                 : hasActiveCycle
@@ -268,7 +268,7 @@ export default function CurrentCycleSensorTrends({
             </h2>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
               {replay
-                ? "Stored environmental readings advance with the dashboard replay timestamp. These charts are not live sensor monitoring."
+                ? "Environmental readings advance with the selected monitoring timestamp."
                 : disconnected
                 ? "Sensor connection is inactive. The charts below show the last recorded data and are not realtime."
                 : !hasActiveCycle
@@ -295,7 +295,7 @@ export default function CurrentCycleSensorTrends({
                     className="rounded-full border border-cyan-100 bg-white px-2.5 py-1 text-cyan-800"
                   >
                     {replay
-                      ? `Zone ${zone} · Replay data`
+                      ? `Zone ${zone} · Monitoring data`
                       : disconnected
                       ? `Zone ${zone} · Sensor disconnected`
                       : zoneCycle.status === "draft"
@@ -326,7 +326,7 @@ export default function CurrentCycleSensorTrends({
                 }`}
               >
                 {replay
-                  ? "Replay timestamp active"
+                  ? "Selected timestamp active"
                   : disconnected
                     ? "Sensor Disconnected"
                     : "Updates every minute"}
@@ -342,7 +342,7 @@ export default function CurrentCycleSensorTrends({
                 [
                   "live",
                   replay
-                    ? "Replay · Recent Window"
+                    ? "Recent Window"
                     : disconnected
                       ? "Last Recorded · 6 Hours"
                       : "Live · Last 6 Hours",
@@ -374,12 +374,6 @@ export default function CurrentCycleSensorTrends({
           Sensor Disconnected · Displaying last recorded environmental data
         </div>
       )}
-      {replay && (
-        <div className="border-b border-violet-200 bg-violet-700 px-5 py-3 text-sm font-semibold text-white">
-          Replay Data · Charts follow the shared dashboard playback position
-        </div>
-      )}
-
       {totalReadings === 0 ? (
         <div className="p-8 text-center">
           <h3 className="font-semibold text-slate-800">
@@ -391,7 +385,7 @@ export default function CurrentCycleSensorTrends({
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 p-5 lg:grid-cols-2 2xl:grid-cols-3">
+        <div className="grid grid-cols-1 items-start gap-5 p-5 lg:grid-cols-2 2xl:grid-cols-3">
           {metricOrder.map((metric, index) => {
             const rule = SENSOR_ALERT_RULES[metric];
             return (

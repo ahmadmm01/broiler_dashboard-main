@@ -183,7 +183,7 @@ export default function CameraFeed({
               replayPlaying ? "animate-pulse" : "opacity-60"
             }`}
           />
-          Replay CCTV · {replayPlaying ? "Playing" : "Paused"}
+          CCTV · {replayPlaying ? "Playing" : "Paused"}
         </div>
       )}
 

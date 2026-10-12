@@ -247,7 +247,9 @@ export function getZonePoint(
       temp: round(clamp(point.temp + wave * 0.15, 24, 34.5)),
       humidity: round(clamp(point.humidity - 0.5 + wave * 0.35, 50, 88)),
       co2: Math.round(clamp(point.co2 + 8 + wave * 8, 350, 1350)),
-      nh3: round(clamp(point.nh3 + 0.02 + wave * 0.03, 0, 5.8)),
+      nh3: round(
+        Math.max(0, point.nh3 + 0.02 + wave * 0.03)
+      ),
       pm25: round(clamp(point.pm25 - 0.4 + wave * 0.35, 0, 42)),
     };
   }
@@ -265,7 +267,10 @@ export function getZonePoint(
         clamp(point.co2 + 65 + wave * 15 + lateCyclePulse * 570, 350, 1350)
       ),
       nh3: round(
-        clamp(point.nh3 + 0.18 + wave * 0.05 + lateCyclePulse * 1.15, 0, 5.8)
+        Math.max(
+          0,
+          point.nh3 + 0.18 + wave * 0.05 + lateCyclePulse * 1.15
+        )
       ),
       pm25: round(
         clamp(point.pm25 + 1.2 + wave * 0.45 + lateCyclePulse * 1.2, 0, 42)
@@ -278,7 +283,9 @@ export function getZonePoint(
     temp: round(clamp(point.temp - 0.45 + wave * 0.18, 24, 34.5)),
     humidity: round(clamp(point.humidity - 2.2 + wave * 0.4, 50, 88)),
     co2: Math.round(clamp(point.co2 - 35 + wave * 10, 350, 1350)),
-    nh3: round(clamp(point.nh3 - 0.08 + wave * 0.04, 0, 5.8)),
+    nh3: round(
+      Math.max(0, point.nh3 - 0.08 + wave * 0.04)
+    ),
     pm25: round(
       clamp(point.pm25 + 1.8 + wave * 0.55 + lateCyclePulse * 9.5, 0, 42)
     ),

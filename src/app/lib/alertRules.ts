@@ -37,8 +37,8 @@ export const SENSOR_ALERT_RULES: Record<
   },
   nh3: {
     label: "NH₃",
-    threshold: 5,
-    criticalThreshold: 7,
+    threshold: 10,
+    criticalThreshold: 20,
     unit: "ppm",
     action: "Inspect litter moisture and ventilation performance.",
   },
@@ -74,7 +74,7 @@ export function countSensorAlertEpisodes(data: DataPoint[]) {
 
   data.forEach((point) => {
     getSensorAlertConditions(point).forEach((condition) => {
-      const isAbove = condition.value > condition.threshold;
+      const isAbove = condition.value >= condition.threshold;
       if (isAbove && !active[condition.metric]) episodes += 1;
       active[condition.metric] = isAbove;
     });

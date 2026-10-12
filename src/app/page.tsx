@@ -47,6 +47,7 @@ import OverviewReplayInsight from "./components/OverviewReplayInsight";
 import ProductionPerformanceCharts, {
   type ProductionPerformanceSeries,
 } from "./components/ProductionPerformanceCharts";
+import ResearchAnalysis from "./components/ResearchAnalysis";
 import { SENSOR_ALERT_RULES } from "./lib/alertRules";
 import {
   calculateHarvestSummary,
@@ -154,7 +155,7 @@ type TrendDatum = {
 };
 
 function readingClass(label: string, value: number, limit: number) {
-  if (value <= limit) return "text-gray-900";
+  if (value < limit) return "text-gray-900";
   if (label === "NH₃") return "text-orange-600";
   if (label === "PM2.5") return "text-yellow-700";
   return "text-red-600";
@@ -315,6 +316,8 @@ function aggregateTrendRecords<T extends TrendDatum>(
 }
 
 function buildCards(latest: DataPoint, zoneLabel: string): LiveCard[] {
+  const nh3Rule = SENSOR_ALERT_RULES.nh3;
+
   return [
     {
       label: `Temperature (${zoneLabel})`,
@@ -344,9 +347,14 @@ function buildCards(latest: DataPoint, zoneLabel: string): LiveCard[] {
       label: `NH₃ (${zoneLabel})`,
       value: latest.nh3,
       unit: "ppm",
-      limit: 5,
+      limit: nh3Rule.threshold,
       icon: "⚗️",
-      color: latest.nh3 > 5 ? "orange" : "green",
+      color:
+        latest.nh3 >= nh3Rule.criticalThreshold
+          ? "red"
+          : latest.nh3 >= nh3Rule.threshold
+            ? "orange"
+            : "green",
     },
     {
       label: `PM2.5 (${zoneLabel})`,
@@ -446,7 +454,7 @@ type CardItemProps = {
 function CardItem({ item }: CardItemProps) {
   return (
     <div
-      className={`p-4 rounded-2xl shadow-sm border ${
+      className={`self-start p-4 rounded-2xl shadow-sm border ${
         item.color === "red"
           ? "bg-red-50 border-red-300"
           : item.color === "orange"
@@ -461,7 +469,7 @@ function CardItem({ item }: CardItemProps) {
       <p className="text-xl font-bold">
         {item.value} {item.unit}
       </p>
-      {item.value > item.limit && (
+      {item.value >= item.limit && (
         <p className="text-xs mt-1 text-red-600">⚠️ Above limit!</p>
       )}
     </div>
@@ -788,7 +796,7 @@ function DashboardContent() {
               maximum: values.length ? Math.max(...values) : 0,
               latest: values.at(-1) ?? 0,
               exceedances: values.filter(
-                (value) => value > rule.threshold
+                (value) => value >= rule.threshold
               ).length,
             },
           ];
@@ -968,7 +976,7 @@ function DashboardContent() {
       {
         label: "NH₃",
         unit: "ppm",
-        limit: 5,
+        limit: SENSOR_ALERT_RULES.nh3.threshold,
         icon: "⚗️",
         values: [
           { zone: "A", value: liveZoneData.A.nh3 },
@@ -1292,6 +1300,9 @@ function DashboardContent() {
             sensorData: reportDatasets[zone],
             alerts: cycleAlerts.filter((entry) => entry.zone === zone),
             zone,
+            sensorIntervalMinutes: IS_REPLAY_MODE
+              ? overviewReplayCycle?.dataIntervalMinutes ?? 360
+              : 1,
           }),
         ])
       ) as Record<Zone, HarvestSummary>,
@@ -1301,6 +1312,7 @@ function DashboardContent() {
       dashboardCyclesByZone,
       dashboardMortality,
       dashboardWeights,
+      overviewReplayCycle,
       reportDatasets,
     ]
   );
@@ -1528,21 +1540,22 @@ function DashboardContent() {
       globalControls={
         IS_REPLAY_MODE && overviewReplayCycle && replayPoint ? (
           <section
-            aria-label="Replay data monitoring controls"
+            aria-label="Last cycle replay controls"
             className="rounded-2xl border border-violet-200 bg-gradient-to-r from-violet-50 to-white p-5 shadow-sm"
           >
             <div className="flex flex-col gap-1 lg:flex-row lg:items-end lg:justify-between lg:gap-6">
               <div>
                 <div className="text-xs font-semibold uppercase tracking-[0.2em] text-violet-700">
-                  Replay Data Monitoring
+                  Last Cycle Replay
                 </div>
                 <h2 className="mt-1 text-2xl font-semibold text-slate-950">
-                  Historical Monitoring Replay
+                  Monitoring Timeline
                 </h2>
               </div>
               <p className="max-w-2xl text-sm text-slate-600 lg:text-right">
-                Values, CCTV, trends, production, and AI insight follow the
-                selected replay timestamp across every dashboard tab.
+                Use the timeline to review how CCTV, sensors, production,
+                alerts, forecasts, and AI insight changed throughout the last
+                cycle.
               </p>
             </div>
 
@@ -1554,7 +1567,7 @@ function DashboardContent() {
                     onClick={() => setIsReplayPlaying((current) => !current)}
                     className="min-w-24 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700"
                   >
-                    {isReplayPlaying ? "Pause replay" : "Play replay"}
+                    {isReplayPlaying ? "Pause" : "Play"}
                   </button>
                   <button
                     type="button"
@@ -1569,7 +1582,7 @@ function DashboardContent() {
                 </div>
                 <input
                   type="range"
-                  aria-label="Global dashboard replay position"
+                  aria-label="Last cycle monitoring timeline position"
                   min={0}
                   max={replayMaximumIndex}
                   value={replayIndex}
@@ -1600,7 +1613,7 @@ function DashboardContent() {
                   Cycle Day {replayCycleDay} of {cycle.targetHarvestDay}
                 </span>
                 <span className="font-semibold text-violet-700">
-                  Replay timestamp: {replayPoint.time}
+                  Selected time: {replayPoint.time}
                 </span>
                 <span>
                   {replayIndex + 1} / {replayData.length} readings
@@ -1674,7 +1687,8 @@ function DashboardContent() {
                       : 0
                   }
                   // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
-                  dummySrc="/video/raw_video_dataset_seg1.mp4"
+                  // dummySrc="/video/raw_video_dataset_seg1.mp4"
+                  dummySrc="/video/Video Project 7(1).mp4"
                   className="h-full w-full object-cover"
                 />
                 <div className="absolute right-4 top-4 rounded-lg bg-black/50 px-3 py-1 text-sm font-medium text-white">
@@ -1705,7 +1719,8 @@ function DashboardContent() {
                           : 0
                       }
                       // dummySrc="/video/cctv ayam 1_tracked-stay.mp4"
-                      dummySrc="/video/raw_video_dataset_seg1.mp4"
+                      // dummySrc="/video/raw_video_dataset_seg1.mp4"
+                      dummySrc="/video/Video Project 7(1).mp4"
                       className="h-full w-full object-cover"
                     />
                     <div className="absolute right-4 top-4 rounded-lg bg-black/50 px-3 py-1 text-sm font-medium text-white">
@@ -1722,19 +1737,21 @@ function DashboardContent() {
           {/* Live Readings */}
           <section>
             <h2 className="mb-4 text-2xl font-semibold">
-              {IS_REPLAY_MODE ? "Replay Sensor Readings" : "Realtime Readings"} – {cycle.houseName}
+              Sensor Readings – {cycle.houseName}
             </h2>
 
             {/* ================= ALL ZONES ================= */}
             {selectedZone === "ALL" && liveByZone && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
                 {liveByZone.map((item) => {
-                  const hasAlert = item.values.some((v) => v.value > item.limit);
+                  const hasAlert = item.values.some(
+                    (v) => v.value >= item.limit
+                  );
 
                   return (
                     <div
                       key={item.label}
-                      className={`rounded-2xl border p-4 shadow-sm ${
+                      className={`self-start rounded-2xl border p-4 shadow-sm ${
                         hasAlert
                           ? "border-amber-200 bg-amber-50"
                           : "border-green-200 bg-green-50"
@@ -1749,7 +1766,7 @@ function DashboardContent() {
                             ACTIVE_ZONES.includes(value.zone as Zone)
                           )
                           .map((v) => {
-                            const isHigh = v.value > item.limit;
+                            const isHigh = v.value >= item.limit;
 
                             return (
                               <div
@@ -1785,7 +1802,7 @@ function DashboardContent() {
 
             {/* ================= SINGLE ZONE ================= */}
             {selectedZone !== "ALL" && (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
                 {IS_OPERATIONAL || IS_REPLAY_MODE
                   ? buildCards(latestSafe, selectedZone).map((item, idx) => (
                       <CardItem key={idx} item={item} />
@@ -1793,7 +1810,7 @@ function DashboardContent() {
                   : INACTIVE_SENSOR_CARDS.map((item) => (
                       <div
                         key={item.label}
-                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
+                        className="self-start rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm"
                       >
                         <div className="mb-2 text-3xl grayscale">{item.icon}</div>
                         <p className="text-sm text-slate-600">
@@ -1812,12 +1829,12 @@ function DashboardContent() {
           {/* System Health */}
           <section>
             <h2 className="mb-3 text-xl font-semibold">
-              {IS_REPLAY_MODE ? "System & Replay Status" : "System Health & Uptime"}
+              System Health & Uptime
             </h2>
             <div className="grid grid-cols-1 gap-3 rounded-xl bg-gray-50 p-4 text-sm shadow sm:grid-cols-2">
               <div>
                 📡 Status: {IS_REPLAY_MODE
-                  ? "Replay Mode"
+                  ? "Monitoring Active"
                   : sensorError
                     ? "Error"
                     : allData.length
@@ -1825,7 +1842,7 @@ function DashboardContent() {
                       : "Starting…"}
               </div>
               <div>
-                🕒 {IS_REPLAY_MODE ? "Replay Timestamp" : "Latest Reading"}: {latestSafe.time}
+                🕒 Latest Reading: {latestSafe.time}
               </div>
               <div>
                 📅 Data Window: {IS_REPLAY_MODE && overviewReplayCycle
@@ -1837,9 +1854,9 @@ function DashboardContent() {
               <div>
                 📦 Records: {IS_REPLAY_MODE ? `${replayIndex + 1} / ${replayData.length}` : sensorMeta?.records ?? allData.length}
               </div>
-              <div>🧪 Data Source: {IS_REPLAY_MODE ? "Stored Cycle Sensors" : "Environmental Sensors"}</div>
+              <div>🧪 Data Source: Environmental Sensors</div>
               <div>
-                ✅ Monitoring: {IS_REPLAY_MODE ? "Replay Data" : "Active"}
+                ✅ Monitoring: Active
               </div>
               {sensorError && (
                 <div className="text-sm text-red-600 sm:col-span-2">
@@ -1875,6 +1892,8 @@ function DashboardContent() {
         />
       )}
 
+      {activeTab === "research" && <ResearchAnalysis />}
+
       {activeTab === "production" && (
         selectedZone !== "ALL" ? (
           <ProductionCyclePanel
@@ -1894,7 +1913,7 @@ function DashboardContent() {
         ) : (
           <section className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-sm text-blue-900">
             {IS_REPLAY_MODE
-              ? `All zones are following Batch ${overviewReplayCycle?.production.sourceSummary?.batch ?? 7} replay at Day ${replayCycleDay}. Select a zone for its synchronized cycle view.`
+              ? `All zones are synchronized to Batch ${overviewReplayCycle?.production.sourceSummary?.batch ?? 7} at Day ${replayCycleDay}. Select a zone for its cycle view.`
               : hasActiveCycle
               ? "Multi-zone sensor and production comparisons are shown below. Select a specific zone to manage its cycle."
               : "Environmental sensors remain active across all three zones. Select a specific zone when you are ready to start its production cycle."}
@@ -2254,7 +2273,7 @@ function DashboardContent() {
           </div>
         )}
         {!isApplying && (
-          <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-2 2xl:grid-cols-3">
+          <div className="mt-5 grid grid-cols-1 items-start gap-5 lg:grid-cols-2 2xl:grid-cols-3">
             {SENSOR_METRICS.filter(showParam).map(
               (metric, index, visibleMetrics) => {
                 const rule = SENSOR_ALERT_RULES[metric];

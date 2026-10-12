@@ -23,7 +23,7 @@ export function createReplayCycles(
     ALL_ZONES.map((zone) => [
       zone,
       {
-        id: `REPLAY-B${sourceSummary?.batch ?? source.id}-${zone}`,
+        id: `BATCH-${sourceSummary?.batch ?? source.id}-${zone}`,
         zone,
         houseName: "Poultry House 1",
         startDate: source.startDate,
@@ -31,7 +31,7 @@ export function createReplayCycles(
         initialBirds: source.production.initialBirds,
         initialAverageWeightKg: 0.044,
         harvestedBirds: 0,
-        notes: "Stored production cycle replay.",
+        notes: "Last cycle production monitoring data.",
         status: "active",
         createdAt: startedAt,
         updatedAt: startedAt,
@@ -41,7 +41,7 @@ export function createReplayCycles(
             id: `replay-started-${zone}-${startedAt}`,
             type: "started",
             timestamp: startedAt,
-            reason: `Stored cycle replay initialized for Zone ${zone}.`,
+            reason: `Cycle monitoring initialized for Zone ${zone}.`,
           },
         ],
       } satisfies ProductionCycle,

@@ -99,7 +99,7 @@ export function useCycleAlerts({
 
       const point = liveZoneData[zone];
       getSensorAlertConditions(point).forEach((condition) => {
-        const isAbove = condition.value > condition.threshold;
+        const isAbove = condition.value >= condition.threshold;
         const wasAbove = alertFlagsRef.current[zone][condition.metric];
 
         if (isAbove && !wasAbove) {

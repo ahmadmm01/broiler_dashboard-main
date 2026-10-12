@@ -43,6 +43,7 @@ yarn-error.log*
 
 # local video datasets
 public/video/*.mp4
+!public/video/Video Project 7(1).mp4
 
 # typescript
 *.tsbuildinfo
