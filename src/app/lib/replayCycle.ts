@@ -1,4 +1,3 @@
-import { standardBroilerWeight } from "./broilerStandard";
 import type {
   HistoricalCycle,
   HistoricalProductionData,
@@ -95,8 +94,10 @@ export function createReplayProductionRecords(
         cycleId: cyclesByZone[zone].id,
         zone,
         day: record.day,
-        stdWeightKg:
-          record.standardWeightKg ?? standardBroilerWeight(record.day),
+        // The supplied farm summary includes actual average weight but no
+        // standard-weight curve. Keep that reference unavailable during replay
+        // instead of introducing an unrelated Ross target into the risk score.
+        stdWeightKg: record.standardWeightKg ?? 0,
         actualWeightKg: record.actualWeightKg,
       }))
     ),

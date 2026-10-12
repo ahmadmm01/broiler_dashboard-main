@@ -558,7 +558,9 @@ export default function CurrentCyclePrediction({
             [
               "Production efficiency",
               `FCR ${baseline.fcr.toFixed(2)}`,
-              `${baseline.weightVariancePercent >= 0 ? "+" : ""}${baseline.weightVariancePercent.toFixed(2)}% vs weight standard`,
+              baseline.hasWeightReference
+                ? `${baseline.weightVariancePercent >= 0 ? "+" : ""}${baseline.weightVariancePercent.toFixed(2)}% vs weight standard`
+                : "Weight comparison is not scored for this replay",
             ],
             ].map(([label, value, detail]) => (
               <div

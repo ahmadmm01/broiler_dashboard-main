@@ -32,6 +32,7 @@ export type HarvestSummary = {
   survivingBirds: number;
   harvestedBirds: number;
   finalAverageWeightKg: number;
+  hasWeightReference: boolean;
   weightVariancePercent: number;
   totalLiveWeightKg: number;
   totalFeedPerBirdKg: number;
@@ -236,6 +237,7 @@ export function calculateHarvestSummary({
   );
   const finalAverageWeightKg = finalWeight?.actualWeightKg ?? 0;
   const standardWeightKg = finalWeight?.stdWeightKg ?? 0;
+  const hasWeightReference = standardWeightKg > 0;
   const weightGainKg = Math.max(
     0,
     finalAverageWeightKg - cycle.initialAverageWeightKg
@@ -251,7 +253,8 @@ export function calculateHarvestSummary({
     survivingBirds,
     harvestedBirds,
     finalAverageWeightKg,
-    weightVariancePercent: standardWeightKg
+    hasWeightReference,
+    weightVariancePercent: hasWeightReference
       ? ((finalAverageWeightKg - standardWeightKg) / standardWeightKg) * 100
       : 0,
     totalLiveWeightKg: harvestedBirds * finalAverageWeightKg,
@@ -287,7 +290,11 @@ export function buildDeterministicCycleSummary(
   } else {
     observations.push("Mortality remains controlled for the recorded cycle.");
   }
-  if (harvest.weightVariancePercent < -5) {
+  if (!harvest.hasWeightReference) {
+    observations.push(
+      "No configured standard-weight reference was supplied for this cycle."
+    );
+  } else if (harvest.weightVariancePercent < -5) {
     observations.push("Final average weight is below the configured standard.");
   } else {
     observations.push("Final average weight is close to or above the configured standard.");

@@ -43,6 +43,7 @@ export type CyclePredictionBaseline = {
   projectedLiveWeightKg: number;
   mortalityRate: number;
   fcr: number;
+  hasWeightReference: boolean;
   weightVariancePercent: number;
   alertCount: number;
   riskLevel: PredictionRiskLevel;
@@ -124,14 +125,17 @@ export function assessCurrentCycleRisk({
     });
   }
 
-  if (harvest.weightVariancePercent < -8) {
+  if (harvest.hasWeightReference && harvest.weightVariancePercent < -8) {
     factors.push({
       key: "weight",
       label: "Weight gap",
       detail: `${Math.abs(harvest.weightVariancePercent).toFixed(2)}% below weight standard`,
       score: 3,
     });
-  } else if (harvest.weightVariancePercent < -3) {
+  } else if (
+    harvest.hasWeightReference &&
+    harvest.weightVariancePercent < -3
+  ) {
     factors.push({
       key: "weight",
       label: "Weight gap",
@@ -300,6 +304,7 @@ export function createCurrentCyclePrediction({
     ),
     mortalityRate: round(harvest.mortalityRate),
     fcr: round(harvest.fcr),
+    hasWeightReference: harvest.hasWeightReference,
     weightVariancePercent: round(harvest.weightVariancePercent),
     alertCount: harvest.alertCount,
     riskLevel,
@@ -370,7 +375,10 @@ export function createCurrentCyclePrediction({
     monitoringFocus.add("PM2.5 during feeding and high-activity periods");
   }
 
-  if (harvest.weightVariancePercent < -3) {
+  if (
+    harvest.hasWeightReference &&
+    harvest.weightVariancePercent < -3
+  ) {
     keyRisks.push({
       title: "Weight below configured target",
       evidence: `Recorded weight is ${Math.abs(harvest.weightVariancePercent).toFixed(2)}% below the configured standard.`,
