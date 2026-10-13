@@ -35,7 +35,7 @@ export const DASHBOARD_TABS = [
   {
     id: "research",
     label: "Analysis",
-    description: "Original-cycle findings and evidence",
+    description: "Past-cycle and replay findings and evidence",
   },
 ] as const;
 

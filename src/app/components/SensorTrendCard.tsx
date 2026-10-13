@@ -11,6 +11,8 @@ export type SensorTrendSummary = {
   minimum: number;
   maximum: number;
   exceedances: number;
+  episodeCount?: number;
+  plottedExceedances?: number;
 };
 
 export default function SensorTrendCard({
@@ -19,6 +21,7 @@ export default function SensorTrendCard({
   valueDigits = 2,
   summaries,
   emphasized = false,
+  plottedLabel,
   children,
 }: {
   title: string;
@@ -26,6 +29,7 @@ export default function SensorTrendCard({
   valueDigits?: number;
   summaries: SensorTrendSummary[];
   emphasized?: boolean;
+  plottedLabel?: string;
   children: ReactNode;
 }) {
   return (
@@ -63,7 +67,7 @@ export default function SensorTrendCard({
               </span>
             </div>
             <div className="mt-1 text-[11px] text-slate-500">
-              Avg {summary.average.toFixed(2)} · Range{" "}
+              Raw avg {summary.average.toFixed(2)} · Raw range{" "}
               {summary.minimum.toFixed(2)}–{summary.maximum.toFixed(2)}
             </div>
             <div
@@ -74,9 +78,15 @@ export default function SensorTrendCard({
               }`}
             >
               {summary.exceedances
-                ? `${summary.exceedances} readings above limit`
-                : "No reading above limit"}
+                ? `${summary.exceedances} raw readings at/above limit`
+                : "No raw reading at/above limit"}
+              {typeof summary.episodeCount === "number" && ` · ${summary.episodeCount} sensor episodes`}
             </div>
+            {plottedLabel && typeof summary.plottedExceedances === "number" && (
+              <div className="mt-1 text-[11px] text-slate-500">
+                {plottedLabel}: {summary.plottedExceedances} plotted points at/above limit
+              </div>
+            )}
           </div>
         ))}
       </div>

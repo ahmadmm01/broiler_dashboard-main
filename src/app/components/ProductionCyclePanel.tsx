@@ -845,7 +845,7 @@ export default function ProductionCyclePanel({
             "Average daily gain",
             `${summary.averageDailyGainGram.toFixed(1)} g/day`,
           ],
-          ["Alert events", integer.format(summary.alertCount)],
+          ["Sensor alert episodes", integer.format(summary.alertCount)],
           [
             "Sensor completeness",
             `${summary.sensorHealth.completeness.toFixed(1)}%`,
@@ -883,10 +883,10 @@ export default function ProductionCyclePanel({
         )}
       </div>
       <p className="mt-3 text-xs text-gray-500">
-        Growth and feed reference: Ross 308 AP as-hatched performance
+        {replay ? "Weight, feed, and water values follow the selected batch records. Water-to-feed ratio is calculated from these records; no standard-weight comparison is configured for this replay." : <>Growth and feed reference: Ross 308 AP as-hatched performance
         objectives (2022). Water is estimated at 2.2× feed. Confirm the farm
         breed, target, and water ratio before using the reference for
-        operational decisions.
+        operational decisions.</>}
       </p>
         </>
       )}

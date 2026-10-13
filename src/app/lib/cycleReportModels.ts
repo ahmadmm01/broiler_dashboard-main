@@ -1,4 +1,4 @@
-import { SENSOR_ALERT_RULES } from "./alertRules";
+import { SENSOR_ALERT_RULES, isSensorAtOrAboveLimit } from "./alertRules";
 import {
   buildDeterministicCycleSummary,
   type HarvestSummary,
@@ -41,28 +41,12 @@ function buildReportActions(
 ): string[] {
   if (!summary) return ["No sensor data is available for this report window."];
 
-  const actions: string[] = [];
-  if (summary.temp.max > 32) {
-    actions.push(
-      "Check ventilation and cooling because temperature exceeded 32°C."
-    );
-  }
-  if (summary.co2.max > 1200) {
-    actions.push("Increase air exchange because CO₂ exceeded 1200 ppm.");
-  }
-  if (summary.nh3.max >= SENSOR_ALERT_RULES.nh3.threshold) {
-    actions.push(
-      `Inspect litter condition and airflow because NH₃ reached the ${SENSOR_ALERT_RULES.nh3.threshold} ppm warning level.`
-    );
-  }
-  if (summary.pm25.max > 35) {
-    actions.push(
-      "Review dust sources, feed handling, and cleaning because PM2.5 exceeded 35 µg/m³."
-    );
-  }
-  if (summary.humidity.max > 85) {
-    actions.push("Reduce moisture sources because humidity exceeded 85%.");
-  }
+  const actions = REPORT_SENSOR_METRICS.filter((metric) =>
+    isSensorAtOrAboveLimit(metric, summary[metric].max)
+  ).map((metric) => {
+    const rule = SENSOR_ALERT_RULES[metric];
+    return `${rule.label} reached or exceeded the ${rule.threshold} ${rule.unit} review limit. ${rule.action}`;
+  });
 
   return actions.length
     ? actions
@@ -160,7 +144,7 @@ export function buildCurrentCycleReportModel({
     const values = sensorData.map((point) => point[metric]);
     const rule = SENSOR_ALERT_RULES[metric];
     const exceedances = values.filter(
-      (value) => value >= rule.threshold
+      (value) => isSensorAtOrAboveLimit(metric, value)
     ).length;
 
     return {
@@ -171,7 +155,7 @@ export function buildCurrentCycleReportModel({
         : 0,
       minimum: values.length ? Math.min(...values) : 0,
       maximum: values.length ? Math.max(...values) : 0,
-      exceedanceLabel: `${exceedances.toLocaleString()} readings above ${rule.threshold.toLocaleString()} ${rule.unit}`,
+      exceedanceLabel: `${exceedances.toLocaleString()} raw readings at/above ${rule.threshold.toLocaleString()} ${rule.unit}`,
     };
   });
 
@@ -227,7 +211,7 @@ export function buildCurrentCycleReportModel({
       },
     ],
     sensorMetrics,
-    sensorSummary: `${sensorData.length.toLocaleString()} readings are included with ${harvestSummary.sensorHealth.completeness.toFixed(1)}% expected coverage and ${harvestSummary.sensorHealth.issueCount.toLocaleString()} readings requiring review. ${activeAlertCount.toLocaleString()} sensor alerts are active at export; ${harvestSummary.alertCount.toLocaleString()} threshold alert episodes were recorded across the cycle.`,
+    sensorSummary: `${sensorData.length.toLocaleString()} raw readings are included with ${harvestSummary.sensorHealth.completeness.toFixed(1)}% expected coverage and ${harvestSummary.sensorHealth.issueCount.toLocaleString()} data-quality checks requiring review. ${activeAlertCount.toLocaleString()} sensor conditions are active at the selected record; ${harvestSummary.alertCount.toLocaleString()} threshold alert episodes were recorded across the cycle.`,
     analysis,
   };
 }

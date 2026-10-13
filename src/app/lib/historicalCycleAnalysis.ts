@@ -1,5 +1,7 @@
 import type { HistoricalCycle } from "./historicalCycles";
-import { SENSOR_ALERT_RULES } from "./alertRules";
+import { SENSOR_ALERT_RULES, createSensorAlertSnapshot, isSensorAtOrAboveLimit } from "./alertRules";
+import { calculateSensorHealth } from "./cycleAnalytics";
+import { assessCurrentCycleRisk } from "./cyclePrediction";
 
 export type HistoricalAnalysisRisk = "Low" | "Moderate" | "High";
 
@@ -128,6 +130,9 @@ export type HistoricalCycleAnalysisBaseline = {
   readingsWithIssue: number;
   issueReadingPercent: number;
   riskLevel: HistoricalAnalysisRisk;
+  riskDrivers: string[];
+  sensorAlertEpisodes: number;
+  activeSensorConditions: number;
   metrics: HistoricalMetricReview[];
   cyclePhases: HistoricalCyclePhaseReview[];
   production: {
@@ -238,42 +243,6 @@ export function createHistoricalCycleAnalysis(
     };
   };
 
-  const metrics: HistoricalMetricReview[] = [
-    metric("temp", "Temperature", "°C", "≤ 32 °C", (value) => value > 32),
-    metric(
-      "humidity",
-      "Humidity",
-      "%",
-      "60–80% review band",
-      (value) => value < 60 || value > 80
-    ),
-    metric("co2", "CO₂", "ppm", "≤ 1,200 ppm", (value) => value > 1200),
-    metric(
-      "nh3",
-      "NH₃",
-      "ppm",
-      `< ${SENSOR_ALERT_RULES.nh3.threshold} ppm target`,
-      (value) => value >= SENSOR_ALERT_RULES.nh3.threshold
-    ),
-    metric(
-      "pm25",
-      "PM2.5",
-      "µg/m³",
-      "≤ 35 µg/m³",
-      (value) => value > 35
-    ),
-  ];
-
-  const isOutsideMetricLimit = (
-    key: HistoricalMetricReview["key"],
-    value: number
-  ) => {
-    if (key === "temp") return value > 32;
-    if (key === "humidity") return value < 60 || value > 80;
-    if (key === "co2") return value > 1200;
-    if (key === "nh3") return value >= SENSOR_ALERT_RULES.nh3.threshold;
-    return value > 35;
-  };
   const metricKeys: HistoricalMetricReview["key"][] = [
     "temp",
     "humidity",
@@ -281,6 +250,11 @@ export function createHistoricalCycleAnalysis(
     "nh3",
     "pm25",
   ];
+  const metrics = metricKeys.map((key) => {
+    const rule = SENSOR_ALERT_RULES[key];
+    return metric(key, rule.label, rule.unit, `< ${rule.threshold} ${rule.unit}`, (value) => isSensorAtOrAboveLimit(key, value));
+  });
+  const isOutsideMetricLimit = isSensorAtOrAboveLimit;
   const readingsWithIssue = count(
     (index) =>
       metricKeys.some((key) =>
@@ -479,24 +453,20 @@ export function createHistoricalCycleAnalysis(
       };
     }
   );
-  let retrospectiveRiskScore =
-    issueReadingPercent >= 25 ? 3 : issueReadingPercent >= 5 ? 1 : 0;
-  if (mortalityRate > 3) retrospectiveRiskScore += 3;
-  else if (mortalityRate > 1.5) retrospectiveRiskScore += 1;
-  if (weightVariancePercent !== null) {
-    if (weightVariancePercent < -8) retrospectiveRiskScore += 3;
-    else if (weightVariancePercent < -3) retrospectiveRiskScore += 2;
-  }
-  if (estimatedFcr !== null) {
-    if (estimatedFcr > 1.9) retrospectiveRiskScore += 2;
-    else if (estimatedFcr > 1.7) retrospectiveRiskScore += 1;
-  }
-  const riskLevel: HistoricalAnalysisRisk =
-    retrospectiveRiskScore >= 5
-      ? "High"
-      : retrospectiveRiskScore >= 2
-        ? "Moderate"
-        : "Low";
+  const alertSnapshot = createSensorAlertSnapshot({ data: cycle.data, cycleId: cycle.id, zone: cycle.zone });
+  const sensorHealth = calculateSensorHealth(cycle.data, cycle.harvestDay, intervalMinutes);
+  const riskAssessment = assessCurrentCycleRisk({
+    harvest: {
+      mortalityRate,
+      hasWeightReference: weightVariancePercent !== null,
+      weightVariancePercent: weightVariancePercent ?? 0,
+      fcr: estimatedFcr ?? 0,
+      alertCount: alertSnapshot.episodeCount,
+      sensorHealth,
+    },
+    sensorData: cycle.data,
+  });
+  const riskLevel = riskAssessment.level;
 
   const baseline: HistoricalCycleAnalysisBaseline = {
     cycleId: cycle.id,
@@ -511,6 +481,9 @@ export function createHistoricalCycleAnalysis(
     readingsWithIssue,
     issueReadingPercent,
     riskLevel,
+    riskDrivers: riskAssessment.factors.map((factor) => `${factor.label}: ${factor.detail}`),
+    sensorAlertEpisodes: alertSnapshot.episodeCount,
+    activeSensorConditions: alertSnapshot.activeConditionCount,
     metrics,
     cyclePhases,
     production: {

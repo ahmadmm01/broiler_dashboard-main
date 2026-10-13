@@ -9,15 +9,18 @@ export default function NotificationCenter({
   onToggleSound,
   onAcknowledge,
   cycleAlertEpisodeCount,
+  scopeLabel,
 }: {
   alerts: AlertEvent[];
   soundEnabled: boolean;
   onToggleSound: () => void;
   onAcknowledge: (id: string) => void;
   cycleAlertEpisodeCount: number;
+  scopeLabel?: string;
 }) {
   const [isOpen, setIsOpen] = useState(false);
-  const activeCount = alerts.filter((alert) => alert.status === "active").length;
+  const activeCount = alerts.filter((alert) => alert.status !== "resolved").length;
+  const unacknowledgedCount = alerts.filter((alert) => alert.status === "active").length;
   const recentAlerts = alerts.slice(0, 8);
 
   return (
@@ -53,10 +56,14 @@ export default function NotificationCenter({
           <div className="flex items-center justify-between gap-3 mb-3">
             <div>
               <h3 className="font-semibold">Notification Center</h3>
+              {scopeLabel && <p className="mt-1 text-xs font-medium text-slate-600">{scopeLabel}</p>}
               <p className="text-xs text-gray-500">
-                {activeCount} active now · {cycleAlertEpisodeCount} threshold{" "}
+                {activeCount} active at selected record · {cycleAlertEpisodeCount} sensor threshold{" "}
                 {cycleAlertEpisodeCount === 1 ? "episode" : "episodes"} in the
                 selected cycle scope
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                {unacknowledgedCount} awaiting acknowledgement. An episode groups consecutive readings at/above one metric&apos;s limit.
               </p>
             </div>
             <button
@@ -72,7 +79,7 @@ export default function NotificationCenter({
             {recentAlerts.length === 0 ? (
               <div className="p-4 rounded-xl bg-green-50 text-green-800 text-sm">
                 {cycleAlertEpisodeCount > 0
-                  ? `No active or persisted notifications are in this timeline. Cycle analysis detected ${cycleAlertEpisodeCount} threshold episodes from the stored sensor history.`
+                  ? `${cycleAlertEpisodeCount} sensor threshold episodes occurred earlier in this cycle; no condition is active at the selected record.`
                   : "No active alerts or cycle threshold episodes have been recorded."}
               </div>
             ) : (
@@ -93,7 +100,7 @@ export default function NotificationCenter({
                         Zone {alert.zone} · {alert.label} · {alert.severity}
                       </div>
                       <div className="text-xs text-gray-600">
-                        {alert.value.toFixed(2)} {alert.unit} · limit {alert.threshold} {alert.unit}
+                        {alert.valueLabel ?? "Reading"}: {alert.value.toFixed(2)} {alert.unit} · limit {alert.threshold} {alert.unit}
                       </div>
                       <div className="text-[11px] text-gray-400 mt-1">
                         {alert.timestamp} · {alert.status}

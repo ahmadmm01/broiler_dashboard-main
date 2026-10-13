@@ -2,7 +2,9 @@ import type {
   HistoricalCycle,
   HistoricalProductionData,
 } from "./historicalCycles";
+import { getZonePoint } from "./sensorData";
 import type {
+  DataPoint,
   ConsumptionEntry,
   MortalityEntry,
   ProductionCycle,
@@ -11,6 +13,10 @@ import type {
 } from "./types";
 
 const ALL_ZONES: Zone[] = ["A", "B", "C"];
+
+export function getReplayZonePoint(point: DataPoint, index: number, total: number, zone: Zone, sourceZone: Zone = "A") {
+  return zone === sourceZone ? point : getZonePoint(point, index, total, zone);
+}
 
 export function createReplayCycles(
   source: HistoricalCycle

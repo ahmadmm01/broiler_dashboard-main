@@ -271,6 +271,12 @@ export async function POST(request: Request) {
       );
     }
 
+    if (advice.zoneSummaries) {
+      advice.zoneSummaries = advice.zoneSummaries.map((item) => ({
+        ...item,
+        riskLevel: baselines.find((baseline: CyclePredictionBaseline) => baseline.zone === item.zone)?.riskLevel ?? item.riskLevel,
+      }));
+    }
     return NextResponse.json({ advice, model });
   } catch (error) {
     console.error("Failed to generate current-cycle prediction", error);

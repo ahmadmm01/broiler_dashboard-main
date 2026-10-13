@@ -158,7 +158,7 @@ export function calculateSensorHealth(
 ): SensorHealthSummary {
   const normalizedIntervalMinutes = Math.max(1, expectedIntervalMinutes);
   const expectedRecords =
-    data.length > 1
+    data.length > 0
       ? Math.max(
           1,
           Math.round(
@@ -198,7 +198,6 @@ export function calculateHarvestSummary({
   consumptions,
   weights,
   sensorData,
-  alerts,
   zone,
   sensorIntervalMinutes = 1,
 }: {
@@ -269,7 +268,7 @@ export function calculateHarvestSummary({
     averageDailyGainGram: cycleDay
       ? (weightGainKg * 1000) / cycleDay
       : 0,
-    alertCount: Math.max(alerts.length, countSensorAlertEpisodes(sensorData)),
+    alertCount: countSensorAlertEpisodes(sensorData),
     sensorHealth: calculateSensorHealth(
       sensorData,
       cycleDay,

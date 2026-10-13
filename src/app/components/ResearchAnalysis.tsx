@@ -21,13 +21,13 @@ import {
   getDatasetCoverage,
   getEpisodeSummary,
   getOutcomeAssociations,
-  RESEARCH_CYCLES,
+  type ResearchCycle,
   RESEARCH_METRIC_META,
   RESEARCH_METRICS,
 } from "../lib/researchAnalysis";
 import type { SensorMetric } from "../lib/types";
 
-const cycleColors = ["#0f766e", "#7c3aed"];
+const cycleColors = ["#64748b", "#d97706", "#0f766e", "#7c3aed"];
 
 function formatValue(value: number, metric: SensorMetric) {
   return value.toFixed(RESEARCH_METRIC_META[metric].decimals);
@@ -57,15 +57,15 @@ function thresholdCellTone(share: number) {
   return "bg-red-800";
 }
 
-export default function ResearchAnalysis() {
+export default function ResearchAnalysis({ cycles }: { cycles: ResearchCycle[] }) {
   const [selectedCycleId, setSelectedCycleId] = useState(
-    RESEARCH_CYCLES[0]?.id ?? ""
+    cycles[0]?.id ?? ""
   );
   const [selectedMetric, setSelectedMetric] =
     useState<SensorMetric>("temp");
   const selectedCycle =
-    RESEARCH_CYCLES.find((cycle) => cycle.id === selectedCycleId) ??
-    RESEARCH_CYCLES[0];
+    cycles.find((cycle) => cycle.id === selectedCycleId) ??
+    cycles[0];
 
   const correlationMatrix = useMemo(
     () => (selectedCycle ? getCorrelationMatrix(selectedCycle) : null),
@@ -87,18 +87,18 @@ export default function ResearchAnalysis() {
   if (!selectedCycle) {
     return (
       <section className="rounded-2xl border border-slate-200 bg-white p-6">
-        No research-cycle dataset is available.
+        No cycle dataset is available for this zone.
       </section>
     );
   }
 
   const trendData = Array.from(
-    { length: Math.max(...RESEARCH_CYCLES.map((cycle) => cycle.harvestDay)) },
+    { length: Math.max(...cycles.map((cycle) => cycle.harvestDay)) },
     (_, dayIndex) => {
       const day = dayIndex + 1;
       return Object.fromEntries([
         ["day", day],
-        ...RESEARCH_CYCLES.map((cycle) => [
+        ...cycles.map((cycle) => [
           cycle.id,
           cycle.daily.find((row) => row.day === day)?.[selectedMetric] ?? null,
         ]),
@@ -122,16 +122,17 @@ export default function ResearchAnalysis() {
             Analysis
           </div>
           <h2 className="mt-2 text-3xl font-semibold">
-            Original two-cycle environmental evidence
+            Past Cycles & Replay Analysis
           </h2>
           <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
-            This view uses the two original Zone A cycles from the supplied
-            workbook. It does not use the shifted or blended batch profiles in
-            the operational history view.
+            This view uses the same batch records as Environment, Production,
+            History, and Findings. B:4–B:6 are completed past cycles. B:7 follows
+            the selected replay position; only readings available up to that
+            timestamp enter its analysis.
           </p>
         </div>
         <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {RESEARCH_CYCLES.map((cycle, index) => {
+          {cycles.map((cycle, index) => {
             const coverage = getDatasetCoverage(cycle);
             return (
               <div
@@ -176,8 +177,8 @@ export default function ResearchAnalysis() {
               Environmental conditions by broiler age
             </h3>
             <p className="mt-1 text-sm text-slate-600">
-              Daily averages align both cycles to Day 1–37 for a comparable age
-              basis.
+              Daily averages compare each batch at the same broiler age. The replay
+              line stops at the selected day; past-cycle lines show completed records.
             </p>
           </div>
           <label className="text-sm font-medium text-slate-700">
@@ -213,7 +214,7 @@ export default function ResearchAnalysis() {
               />
               <Tooltip />
               <Legend />
-              {RESEARCH_CYCLES.map((cycle, index) => (
+              {cycles.map((cycle, index) => (
                 <Line
                   key={cycle.id}
                   type="monotone"
@@ -247,6 +248,7 @@ export default function ResearchAnalysis() {
             </div>
             <CycleSelector
               value={selectedCycle.id}
+              cycles={cycles}
               onChange={setSelectedCycleId}
             />
           </div>
@@ -352,14 +354,15 @@ export default function ResearchAnalysis() {
           Daily threshold exceedance map
         </h3>
         <p className="mt-1 text-sm text-slate-600">
-          Each cell shows the share of four daily readings above the configured
+          Each cell shows the share of available raw readings at or above the configured
           dashboard threshold for {selectedCycle.label}.
         </p>
         <div className="mt-5 overflow-x-auto pb-2">
           <div className="min-w-[1050px]">
-            <div className="grid grid-cols-[110px_repeat(37,minmax(20px,1fr))] gap-1 text-center text-[10px] text-slate-500">
+            <div className="grid gap-1 text-center text-[10px] text-slate-500"
+              style={{ gridTemplateColumns: `110px repeat(${selectedCycle.harvestDay}, minmax(20px, 1fr))` }}>
               <div className="text-left font-semibold">Variable</div>
-              {Array.from({ length: 37 }, (_, index) => (
+              {Array.from({ length: selectedCycle.harvestDay }, (_, index) => (
                 <div key={index}>{index + 1}</div>
               ))}
               {thresholdMap.flatMap((row) => [
@@ -372,7 +375,7 @@ export default function ResearchAnalysis() {
                 ...row.days.map((day) => (
                   <div
                     key={`${row.metric}-${day.day}`}
-                    title={`${RESEARCH_METRIC_META[row.metric].shortLabel}, Day ${day.day}: ${day.exceedances}/${day.total} readings above ${SENSOR_ALERT_RULES[row.metric].threshold} ${SENSOR_ALERT_RULES[row.metric].unit}`}
+                    title={`${RESEARCH_METRIC_META[row.metric].shortLabel}, Day ${day.day}: ${day.exceedances}/${day.total} raw readings at/above ${SENSOR_ALERT_RULES[row.metric].threshold} ${SENSOR_ALERT_RULES[row.metric].unit}`}
                     className={`h-7 rounded ${thresholdCellTone(day.share)}`}
                   />
                 )),
@@ -409,7 +412,7 @@ export default function ResearchAnalysis() {
                 <tr>
                   <th className="pb-3">Variable</th>
                   <th className="pb-3 text-right">Episodes</th>
-                  <th className="pb-3 text-right">Readings above</th>
+                  <th className="pb-3 text-right">Raw crossings</th>
                   <th className="pb-3 text-right">Longest run</th>
                 </tr>
               </thead>
@@ -433,7 +436,7 @@ export default function ResearchAnalysis() {
           </div>
           <p className="mt-4 text-xs leading-5 text-slate-500">
             An episode begins when a metric crosses its configured threshold
-            and ends when it returns to or below that threshold. Sampling occurs
+            and ends when it returns below that threshold. Sampling occurs
             every {selectedCycle.intervalMinutes / 60} hours, so this view does
             not claim exact continuous event duration.
           </p>
@@ -451,7 +454,7 @@ export default function ResearchAnalysis() {
               <thead className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="pb-3">Variable</th>
-                  {RESEARCH_CYCLES.map((cycle) => (
+                  {cycles.map((cycle) => (
                     <th key={cycle.id} className="pb-3 text-right">
                       {cycle.label} avg. / CV / outside
                     </th>
@@ -464,7 +467,7 @@ export default function ResearchAnalysis() {
                     <td className="py-3 font-medium text-slate-800">
                       {RESEARCH_METRIC_META[metric].shortLabel}
                     </td>
-                    {RESEARCH_CYCLES.map((cycle) => {
+                    {cycles.map((cycle) => {
                       const summary = getCycleMetricSummary(cycle, metric);
                       return (
                         <td key={cycle.id} className="py-3 text-right text-slate-700">
@@ -481,7 +484,7 @@ export default function ResearchAnalysis() {
             </table>
           </div>
           <div className="mt-5 grid gap-3 sm:grid-cols-2">
-            {RESEARCH_CYCLES.map((cycle) => {
+            {cycles.map((cycle) => {
               const coverage = getDatasetCoverage(cycle);
               return (
                 <div key={cycle.id} className="rounded-xl bg-slate-50 p-4">
@@ -500,7 +503,7 @@ export default function ResearchAnalysis() {
             })}
           </div>
           <p className="mt-4 text-xs leading-5 text-slate-500">
-            Coverage describes records present in the supplied workbook. It
+            Coverage describes records present in the selected observed window. It
             does not measure device uptime, transmission success, sensor drift,
             or communication outages.
           </p>
@@ -512,9 +515,11 @@ export default function ResearchAnalysis() {
 
 function CycleSelector({
   value,
+  cycles,
   onChange,
 }: {
   value: string;
+  cycles: ResearchCycle[];
   onChange: (value: string) => void;
 }) {
   return (
@@ -523,9 +528,9 @@ function CycleSelector({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className="mt-1 block min-w-44 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
+        className="mt-1 block w-full min-w-0 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm"
       >
-        {RESEARCH_CYCLES.map((cycle) => (
+        {cycles.map((cycle) => (
           <option key={cycle.id} value={cycle.id}>
             {cycle.label}
           </option>

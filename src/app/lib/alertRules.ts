@@ -1,4 +1,4 @@
-import type { DataPoint, SensorMetric } from "./types";
+import type { AlertEvent, DataPoint, SensorMetric, Zone } from "./types";
 
 export type SensorAlertCondition = {
   metric: SensorMetric;
@@ -51,6 +51,10 @@ export const SENSOR_ALERT_RULES: Record<
   },
 };
 
+export function isSensorAtOrAboveLimit(metric: SensorMetric, value: number) {
+  return Number.isFinite(value) && value >= SENSOR_ALERT_RULES[metric].threshold;
+}
+
 export function getSensorAlertConditions(point: DataPoint) {
   return (Object.keys(SENSOR_ALERT_RULES) as SensorMetric[]).map((metric) => {
     const rule = SENSOR_ALERT_RULES[metric];
@@ -81,4 +85,71 @@ export function countSensorAlertEpisodes(data: DataPoint[]) {
   });
 
   return episodes;
+}
+
+export type SensorAlertSnapshot = {
+  episodes: AlertEvent[];
+  episodeCount: number;
+  activeConditionCount: number;
+  readingsWithIssue: number;
+};
+
+export function createSensorAlertSnapshot({
+  data,
+  cycleId,
+  zone,
+  acknowledgedIds = [],
+}: {
+  data: DataPoint[];
+  cycleId: string;
+  zone: Zone;
+  acknowledgedIds?: string[];
+}): SensorAlertSnapshot {
+  const episodes: AlertEvent[] = [];
+  const open = new Map<SensorMetric, AlertEvent>();
+  const acknowledged = new Set(acknowledgedIds);
+  let readingsWithIssue = 0;
+  for (const point of data) {
+    let hasIssue = false;
+    for (const condition of getSensorAlertConditions(point)) {
+      const outside = isSensorAtOrAboveLimit(condition.metric, condition.value);
+      const existing = open.get(condition.metric);
+      if (outside) {
+        hasIssue = true;
+        if (existing) {
+          existing.value = Math.max(existing.value, condition.value);
+          if (condition.value >= condition.criticalThreshold) existing.severity = "critical";
+        } else {
+          const id = `${cycleId}-${zone}-${condition.metric}-${point.ts}`;
+          const episode: AlertEvent = {
+            id,
+            cycleId,
+            zone,
+            metric: condition.metric,
+            label: condition.label,
+            timestamp: point.time,
+            value: condition.value,
+            valueLabel: "Episode peak",
+            threshold: condition.threshold,
+            unit: condition.unit,
+            severity: condition.value >= condition.criticalThreshold ? "critical" : "warning",
+            status: acknowledged.has(id) ? "acknowledged" : "active",
+            message: `Zone ${zone}: ${condition.label} reached its configured review limit. ${condition.action}`,
+          };
+          episodes.push(episode);
+          open.set(condition.metric, episode);
+        }
+      } else if (existing) {
+        existing.status = "resolved";
+        open.delete(condition.metric);
+      }
+    }
+    if (hasIssue) readingsWithIssue += 1;
+  }
+  return {
+    episodes: episodes.reverse(),
+    episodeCount: episodes.length,
+    activeConditionCount: open.size,
+    readingsWithIssue,
+  };
 }

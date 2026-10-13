@@ -103,11 +103,11 @@ export default function OverviewReplayInsight({
   const [generated, setGenerated] = useState<GeneratedInsight | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const currentSignature = `${point.ts}:${cycle.id}:${zoneLabel}`;
+  const currentSignature = JSON.stringify({ point, recentPoints, cycleId: cycle.id, zoneLabel, summary, activeAlertCount });
   const isOutdated = Boolean(
     generated && generated.signature !== currentSignature
   );
-  const insightSections = generated
+  const insightSections = generated && !isOutdated
     ? parseInsightSections(generated.insight)
     : [];
 
@@ -247,7 +247,7 @@ export default function OverviewReplayInsight({
           </div>
         )}
 
-        {generated ? (
+        {generated && !isOutdated ? (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
               <span className="font-semibold text-violet-700">
@@ -258,12 +258,6 @@ export default function OverviewReplayInsight({
                 Generated {new Date(generated.generatedAt).toLocaleString("en-GB")}
               </span>
             </div>
-            {isOutdated && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                The monitoring timeline has advanced since this insight was generated. The
-                result below remains tied to its original snapshot.
-              </div>
-            )}
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               {insightSections.map((section, index) => (
                 <article
@@ -305,7 +299,7 @@ export default function OverviewReplayInsight({
           <div className="rounded-xl border border-dashed border-violet-200 bg-violet-50/50 px-5 py-8 text-center">
             <div className="text-3xl" aria-hidden="true">✦</div>
             <h3 className="mt-2 font-semibold text-slate-950">
-              No AI insight has been generated
+              {isOutdated ? "Refresh insight for the selected record" : "No AI insight has been generated"}
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               Current snapshot: {zoneLabel}, Day {summary.cycleDay}, {point.time}.

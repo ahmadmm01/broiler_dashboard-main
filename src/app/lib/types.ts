@@ -100,6 +100,7 @@ export type AlertEvent = {
   severity: AlertSeverity;
   status: AlertStatus;
   message: string;
+  valueLabel?: string;
 };
 
 export type CycleStatus = "draft" | "active" | "completed";

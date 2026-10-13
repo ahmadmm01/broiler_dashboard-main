@@ -140,7 +140,7 @@ export default function DashboardToolbar({
                 {operationalStatus === "inactive"
                   ? "Cycle not running"
                   : operationalStatus === "replay"
-                    ? `Active · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`
+                    ? `Replay ${zoneCycle.id} · Day ${zoneSummary.cycleDay}/${zoneCycle.targetHarvestDay}`
                   : zoneCycle.status === "draft"
                   ? "Not started"
                   : zoneCycle.status === "completed"
@@ -159,7 +159,7 @@ export default function DashboardToolbar({
             >
               {scopedCycleRisks.length > 1
                 ? `Highest cycle risk: ${highestCycleRisk.assessment.level} · Zone ${highestCycleRisk.zone}`
-                : `Cycle risk: ${highestCycleRisk.assessment.level}`}
+                : `${operationalStatus === "replay" ? "Replay cycle risk" : "Cycle risk"}: ${highestCycleRisk.assessment.level}`}
               {highestCycleRisk.assessment.factors.length > 0
                 ? ` · ${highestCycleRisk.assessment.factors
                     .slice(0, 2)
@@ -175,6 +175,7 @@ export default function DashboardToolbar({
         </div>
 
         <NotificationCenter
+          scopeLabel={operationalStatus === "replay" ? `Replay ${reportZones.map((zone) => cyclesByZone[zone].id).join(", ")} · through ${latestTime}` : `${cycle.id} · through ${latestTime}`}
           alerts={operationalStatus === "inactive" ? [] : alerts}
           soundEnabled={soundEnabled}
           onToggleSound={onToggleSound}

@@ -43,12 +43,19 @@ import CurrentCycleSensorTrends from "./components/CurrentCycleSensorTrends";
 import SensorTrendCard from "./components/SensorTrendCard";
 import HistoricalCycleAiAnalysis from "./components/HistoricalCycleAiAnalysis";
 import HistoricalProductionOverview from "./components/HistoricalProductionOverview";
+import HistoricalOutcomeComparison from "./components/HistoricalOutcomeComparison";
+import CycleFindings from "./components/CycleFindings";
 import OverviewReplayInsight from "./components/OverviewReplayInsight";
+import CycleOutcomeAnalysis, {
+  CycleOutcomeSnapshot,
+} from "./components/CycleOutcomeAnalysis";
 import ProductionPerformanceCharts, {
   type ProductionPerformanceSeries,
 } from "./components/ProductionPerformanceCharts";
 import ResearchAnalysis from "./components/ResearchAnalysis";
-import { SENSOR_ALERT_RULES } from "./lib/alertRules";
+import { createDashboardAnalysisCycle } from "./lib/researchAnalysis";
+import { SENSOR_ALERT_RULES, createSensorAlertSnapshot } from "./lib/alertRules";
+import { aggregateSensorReadings, sampleSensorTrend, summarizeSensorMetric } from "./lib/sensorTrendData";
 import {
   calculateHarvestSummary,
   createDraftProductionCycles,
@@ -75,6 +82,7 @@ import DashboardToolbar from "./components/dashboard/DashboardToolbar";
 import {
   LineChart,
   Line,
+  Legend,
   XAxis,
   YAxis,
   Tooltip,
@@ -101,8 +109,18 @@ import { useCycleAlerts } from "./hooks/useCycleAlerts";
 import {
   createReplayCycles,
   createReplayProductionRecords,
+  getReplayZonePoint,
   sliceReplayProduction,
 } from "./lib/replayCycle";
+import {
+  createCycleOutcomeAnalysis,
+  createHistoricalOutcomeRows,
+} from "./lib/outcomeAnalysis";
+import {
+  createCycleFindings,
+  getPreviousFindingCycle,
+  type CycleFindingsStore,
+} from "./lib/cycleFindings";
 
 // ========= Helpers =========
 
@@ -162,11 +180,11 @@ function readingClass(label: string, value: number, limit: number) {
 }
 
 const aggregationDescriptions: Record<AggregationMode, string> = {
-  all: "Stored source readings are sampled to a maximum of 2,000 plotted points for responsive review.",
-  hourly: "Average of all stored readings within each clock hour.",
-  daily: "Average of all readings for each calendar date.",
-  weekly: "Average of available readings in each Monday–Sunday calendar week.",
-  monthly: "Average of all readings for each calendar month.",
+  all: "Raw readings; larger datasets are sampled with period extrema preserved. Limit counts use the full raw record.",
+  hourly: "Solid line: hourly average. Dashed line: recorded peak within each hour.",
+  daily: "Solid line: daily average. Dashed line: recorded peak within each date.",
+  weekly: "Solid line: weekly average. Dashed line: recorded peak within each Monday–Sunday week.",
+  monthly: "Solid line: monthly average. Dashed line: recorded peak within each month.",
 };
 
 function getTrendPeriodStart(date: Date, mode: AggregationMode) {
@@ -485,7 +503,7 @@ const INACTIVE_SENSOR_CARDS = [
 ] as const;
 
 function DashboardContent() {
-  const { activeTab, selectedZone } = useDashboardNavigation();
+  const { activeTab, selectedZone, selectTab } = useDashboardNavigation();
   const isAllZone = selectedZone === "ALL";
 
   // ====== Sensor data ======
@@ -616,6 +634,15 @@ function DashboardContent() {
   const [selectedHistoricalCycleKey, setSelectedHistoricalCycleKey] =
     useState<HistoricalCycle["key"]>("");
   const [isHistoricalDataOpen, setIsHistoricalDataOpen] = useState(false);
+  const [replayAcknowledgedIds, setReplayAcknowledgedIds] = usePersistentState<string[]>(
+    "broiler-dashboard:v1:replay-alert-acknowledgements",
+    () => []
+  );
+  const [cycleFindingsStore, setCycleFindingsStore] =
+    usePersistentState<CycleFindingsStore>(
+      "broiler-dashboard:v1:cycle-findings",
+      () => ({})
+    );
   const [managedHistoricalCycles, setManagedHistoricalCycles] =
     usePersistentState<HistoricalCycle[]>(
       "broiler-dashboard:v9:audit-managed-historical-cycles",
@@ -775,30 +802,20 @@ function DashboardContent() {
   // =====================================================
   // ✅ TARUH aggregatedData DI SINI (WAJIB DI SINI)
   // =====================================================
-  const aggregatedData = useMemo<DataPoint[]>(
-    () => aggregateTrendRecords(chartData, appliedAggregation),
+  const aggregatedData = useMemo(
+    () => {
+      const points = aggregateSensorReadings(chartData, appliedAggregation === "all" ? "raw" : appliedAggregation);
+      return appliedAggregation === "all" ? sampleSensorTrend(points) : points;
+    },
     [appliedAggregation, chartData]
   );
   const historicalTrendSummaries = useMemo(
     () =>
       Object.fromEntries(
         SENSOR_METRICS.map((metric) => {
-          const values = chartData.map((point) => point[metric]);
-          const rule = SENSOR_ALERT_RULES[metric];
           return [
             metric,
-            {
-              average: values.length
-                ? values.reduce((total, value) => total + value, 0) /
-                  values.length
-                : 0,
-              minimum: values.length ? Math.min(...values) : 0,
-              maximum: values.length ? Math.max(...values) : 0,
-              latest: values.at(-1) ?? 0,
-              exceedances: values.filter(
-                (value) => value >= rule.threshold
-              ).length,
-            },
+            summarizeSensorMetric(chartData, aggregatedData, metric),
           ];
         })
       ) as Record<
@@ -809,9 +826,11 @@ function DashboardContent() {
           maximum: number;
           latest: number;
           exceedances: number;
+          episodeCount: number;
+          plottedExceedances: number;
         }
       >,
-    [chartData]
+    [aggregatedData, chartData]
   );
 
   // =====================================================
@@ -872,24 +891,27 @@ function DashboardContent() {
       ? Math.min(replayIndex, replayMaximumIndex)
       : Math.max(0, allData.length - 1);
     const totalPoints = IS_REPLAY_MODE ? replayData.length : allData.length;
+    const pointForZone = (zone: Zone) => IS_REPLAY_MODE
+      ? getReplayZonePoint(livePoint, latestIndex, totalPoints, zone, overviewReplayCycle?.zone)
+      : getZonePoint(livePoint, latestIndex, totalPoints, zone);
     return {
-      A: getZonePoint(livePoint, latestIndex, totalPoints, "A"),
-      B: getZonePoint(livePoint, latestIndex, totalPoints, "B"),
-      C: getZonePoint(livePoint, latestIndex, totalPoints, "C"),
+      A: pointForZone("A"),
+      B: pointForZone("B"),
+      C: pointForZone("C"),
     };
-  }, [allData.length, livePoint, replayData.length, replayIndex, replayMaximumIndex]);
+  }, [allData.length, livePoint, overviewReplayCycle?.zone, replayData.length, replayIndex, replayMaximumIndex]);
   const {
-    cycleAlerts,
-    visibleAlerts,
-    latestToast,
+    cycleAlerts: persistedCycleAlerts,
+    visibleAlerts: persistedVisibleAlerts,
+    latestToast: liveLatestToast,
     soundEnabled,
     toggleSound,
-    acknowledgeAlert,
+    acknowledgeAlert: acknowledgeLiveAlert,
     resetZoneAlerts,
   } = useCycleAlerts({
     activeZones: ACTIVE_ZONES,
     cyclesByZone: dashboardCyclesByZone,
-    liveZoneData: IS_OPERATIONAL || IS_REPLAY_MODE ? liveZoneData : null,
+    liveZoneData: IS_OPERATIONAL ? liveZoneData : null,
     selectedZone,
   });
 
@@ -1171,12 +1193,9 @@ function DashboardContent() {
           zone,
           monitoringData
           .map((point, index) =>
-            getZonePoint(
-              point,
-              index,
-              IS_REPLAY_MODE ? replayData.length : monitoringData.length,
-              zone
-            )
+            IS_REPLAY_MODE
+              ? getReplayZonePoint(point, index, replayData.length, zone, overviewReplayCycle?.zone)
+              : getZonePoint(point, index, monitoringData.length, zone)
           )
           .filter((point) => {
             if (IS_REPLAY_MODE) return true;
@@ -1190,7 +1209,30 @@ function DashboardContent() {
         ];
       })
     ) as Record<Zone, DataPoint[]>;
-  }, [dashboardCyclesByZone, monitoringData, replayData.length]);
+  }, [dashboardCyclesByZone, monitoringData, overviewReplayCycle?.zone, replayData.length]);
+  const replayAlerts = useMemo(
+    () => IS_REPLAY_MODE
+      ? ACTIVE_ZONES.flatMap((zone) => createSensorAlertSnapshot({
+          data: reportDatasets[zone],
+          cycleId: dashboardCyclesByZone[zone].id,
+          zone,
+          acknowledgedIds: replayAcknowledgedIds,
+        }).episodes).sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+      : [],
+    [dashboardCyclesByZone, replayAcknowledgedIds, reportDatasets]
+  );
+  const cycleAlerts = IS_REPLAY_MODE ? replayAlerts : persistedCycleAlerts;
+  const visibleAlerts = IS_REPLAY_MODE
+    ? replayAlerts.filter((entry) => selectedZone === "ALL" || entry.zone === selectedZone)
+    : persistedVisibleAlerts;
+  const latestToast = IS_REPLAY_MODE ? null : liveLatestToast;
+  const acknowledgeAlert = (id: string) => {
+    if (IS_REPLAY_MODE) {
+      setReplayAcknowledgedIds((current) => current.includes(id) ? current : [...current, id].slice(-100));
+    } else {
+      acknowledgeLiveAlert(id);
+    }
+  };
   const visibleSensorSeries = useMemo(
     () =>
       reportZones.map((zone) => ({
@@ -1317,6 +1359,88 @@ function DashboardContent() {
     ]
   );
   const harvestSummary = harvestSummariesByZone[reportZone];
+  const currentFindingCycle = useMemo<HistoricalCycle>(() => {
+    if (IS_REPLAY_MODE && overviewReplayCycle) {
+      return {
+        ...overviewReplayCycle,
+        id: reportZone === overviewReplayCycle.zone
+          ? overviewReplayCycle.id
+          : `${overviewReplayCycle.id}:${reportZone}`,
+        zone: reportZone,
+        label: `Zone ${reportZone} · Batch ${overviewReplayCycle.production.sourceSummary?.batch ?? overviewReplayCycle.id}`,
+      };
+    }
+    const current = dashboardCyclesByZone[reportZone];
+    return {
+      key: current.id,
+      id: current.id,
+      label: `${current.houseName} · Zone ${reportZone} · ${current.id}`,
+      zone: reportZone,
+      status: "Completed",
+      harvestDay: current.targetHarvestDay,
+      startDate: current.startDate,
+      endDate: current.actualHarvestDate ?? reportDatasets[reportZone].at(-1)?.time.slice(0, 10) ?? current.startDate,
+      data: reportDatasets[reportZone],
+      averages: { temp: 0, humidity: 0, co2: 0, nh3: 0, pm25: 0 },
+      production: currentProductionByZone[reportZone],
+    };
+  }, [currentProductionByZone, dashboardCyclesByZone, overviewReplayCycle, reportDatasets, reportZone]);
+  const currentFindingsSnapshot = useMemo(
+    () => createCycleFindings({
+      cycle: currentFindingCycle,
+      cycles: allHistoricalCycles,
+      replayDay: IS_REPLAY_MODE ? replayCycleDay : harvestSummary.cycleDay,
+      selectedTimestamp: IS_REPLAY_MODE ? replayPoint?.ts : undefined,
+      sensorData: reportDatasets[reportZone],
+      production: currentProductionByZone[reportZone],
+      completed: IS_REPLAY_MODE
+        ? replayData.length > 0 && replayIndex >= replayMaximumIndex
+        : dashboardCyclesByZone[reportZone].status === "completed",
+    }),
+    [allHistoricalCycles, currentFindingCycle, currentProductionByZone, dashboardCyclesByZone, harvestSummary.cycleDay, replayCycleDay, replayData.length, replayIndex, replayMaximumIndex, replayPoint?.ts, reportDatasets, reportZone]
+  );
+  const previousFindingCycle = getPreviousFindingCycle(currentFindingCycle, allHistoricalCycles);
+  const dashboardAnalysisCycles = useMemo(() => {
+    const past = allHistoricalCycles
+      .filter((entry) => entry.zone === reportZone && (!IS_REPLAY_MODE || entry.id !== overviewReplayCycle?.id))
+      .sort((left, right) => left.startDate.localeCompare(right.startDate))
+      .map((entry) => createDashboardAnalysisCycle(entry));
+    if (!IS_REPLAY_MODE || !overviewReplayCycle) return past;
+    return [...past, createDashboardAnalysisCycle({
+      ...currentFindingCycle,
+      data: reportDatasets[reportZone],
+      production: currentProductionByZone[reportZone],
+    }, "replay", replayCycleDay)];
+  }, [allHistoricalCycles, currentFindingCycle, currentProductionByZone, overviewReplayCycle, replayCycleDay, reportDatasets, reportZone]);
+  const currentOutcomeAnalysis = useMemo(
+    () =>
+      createCycleOutcomeAnalysis({
+        cycle: dashboardCyclesByZone[reportZone],
+        summary: harvestSummariesByZone[reportZone],
+        sensorData: reportDatasets[reportZone],
+        replayDay: IS_REPLAY_MODE ? replayCycleDay : undefined,
+        sourceCycle: IS_REPLAY_MODE ? overviewReplayCycle : undefined,
+        historicalCycles: allHistoricalCycles.filter(
+          (historicalCycle) => historicalCycle.zone === reportZone
+        ),
+      }),
+    [
+      allHistoricalCycles,
+      dashboardCyclesByZone,
+      harvestSummariesByZone,
+      overviewReplayCycle,
+      replayCycleDay,
+      reportDatasets,
+      reportZone,
+    ]
+  );
+  const historicalOutcomeRows = useMemo(
+    () =>
+      createHistoricalOutcomeRows(
+        historicalCycles
+      ),
+    [historicalCycles]
+  );
   const cycleRiskAssessmentsByZone = useMemo<Record<
     Zone,
     CycleRiskAssessment
@@ -1483,7 +1607,7 @@ function DashboardContent() {
           riskAssessment: cycleRiskAssessmentsByZone[reportZone],
           activeAlertCount: cycleAlerts.filter(
             (entry) =>
-              entry.zone === reportZone && entry.status === "active"
+              entry.zone === reportZone && entry.status !== "resolved"
           ).length,
           analysisSnapshot: currentReportAnalysis,
         })
@@ -1868,6 +1992,9 @@ function DashboardContent() {
 
         </div>
       </div>
+      {(IS_OPERATIONAL || IS_REPLAY_MODE) && hasStartedCycle && (
+        <CycleOutcomeSnapshot analysis={currentOutcomeAnalysis} />
+      )}
       {IS_REPLAY_MODE && replayPoint && (
         <OverviewReplayInsight
           point={latestSafe}
@@ -1875,7 +2002,7 @@ function DashboardContent() {
           cycle={cycle}
           summary={harvestSummary}
           activeAlertCount={visibleAlerts.filter(
-            (entry) => entry.status === "active"
+            (entry) => entry.status !== "resolved"
           ).length}
           zoneLabel={selectedZone === "ALL" ? "All Zones" : `Zone ${selectedZone}`}
           onGenerateStart={() => setIsReplayPlaying(false)}
@@ -1892,7 +2019,7 @@ function DashboardContent() {
         />
       )}
 
-      {activeTab === "research" && <ResearchAnalysis />}
+      {activeTab === "research" && <ResearchAnalysis cycles={dashboardAnalysisCycles} />}
 
       {activeTab === "production" && (
         selectedZone !== "ALL" ? (
@@ -2015,6 +2142,13 @@ function DashboardContent() {
           </div>
         </div>
       </section>
+
+      {selectedZone !== "ALL" && isHistoricalDataOpen && (
+        <HistoricalOutcomeComparison
+          rows={historicalOutcomeRows}
+          replayBatch={overviewReplayCycle?.production.sourceSummary?.batch}
+        />
+      )}
 
       {selectedZone !== "ALL" && isHistoricalDataOpen && (
         <>
@@ -2286,6 +2420,7 @@ function DashboardContent() {
                     title={rule.label}
                     unit={rule.unit}
                     valueDigits={metric === "co2" ? 0 : 2}
+                    plottedLabel={appliedAggregation === "all" ? "Raw points" : `${appliedAggregation.charAt(0).toUpperCase() + appliedAggregation.slice(1)} averages`}
                     emphasized={
                       visibleMetrics.length > 1 &&
                       index === visibleMetrics.length - 1
@@ -2354,10 +2489,11 @@ function DashboardContent() {
                               fontSize: 10,
                             }}
                           />
+                          {appliedAggregation !== "all" && <Legend />}
                           <Line
                             type="monotone"
                             dataKey={metric}
-                            name={`Zone ${historicalZone}`}
+                            name={`Zone ${historicalZone} · ${appliedAggregation === "all" ? "Reading" : `${appliedAggregation} average`}`}
                             stroke={SENSOR_METRIC_COLORS[metric]}
                             strokeWidth={2.25}
                             dot={
@@ -2371,6 +2507,11 @@ function DashboardContent() {
                             connectNulls
                             isAnimationActive={false}
                           />
+                          {appliedAggregation !== "all" && (
+                            <Line type="linear" dataKey={`peaks.${metric}`} name={`Zone ${historicalZone} · Recorded peak`}
+                              stroke="#ea580c" strokeDasharray="4 4" strokeWidth={1.5} dot={false} activeDot={{ r: 3 }}
+                              connectNulls isAnimationActive={false} />
+                          )}
                         </LineChart>
                       </ResponsiveContainer>
                     </div>
@@ -2661,6 +2802,16 @@ function DashboardContent() {
       )}
 
       {selectedZone !== "ALL" && isHistoricalDataOpen && selectedHistoricalCycle && (
+        <CycleFindings
+          key={`historical-findings:${selectedHistoricalCycle.id}`}
+          snapshot={createCycleFindings({ cycle: selectedHistoricalCycle, cycles: allHistoricalCycles })}
+          previousCycle={getPreviousFindingCycle(selectedHistoricalCycle, allHistoricalCycles)}
+          store={cycleFindingsStore}
+          setStore={setCycleFindingsStore}
+        />
+      )}
+
+      {selectedZone !== "ALL" && isHistoricalDataOpen && selectedHistoricalCycle && (
         <section className="order-2">
           <HistoricalCycleAiAnalysis
             cycle={selectedHistoricalCycle}
@@ -2675,7 +2826,7 @@ function DashboardContent() {
       {activeTab === "production" && (
         <>
       {hasStartedCycle ? (
-        <section>
+        <section className="space-y-8">
         {!isAllZone && cycle.status === "completed" && (
           <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
             This cycle is completed and production entry is locked. Review its
@@ -2716,6 +2867,29 @@ function DashboardContent() {
           series={currentProductionSeries}
         />
 
+        <CycleOutcomeAnalysis
+          analysis={currentOutcomeAnalysis}
+          onGenerateStart={
+            IS_REPLAY_MODE ? () => setIsReplayPlaying(false) : undefined
+          }
+        />
+
+        <CycleFindings
+          key={`current-findings:${currentFindingCycle.id}`}
+          snapshot={currentFindingsSnapshot}
+          previousCycle={previousFindingCycle}
+          store={cycleFindingsStore}
+          setStore={setCycleFindingsStore}
+          onGenerateStart={IS_REPLAY_MODE ? () => setIsReplayPlaying(false) : undefined}
+          onShowEvidence={IS_REPLAY_MODE ? (timestamp) => {
+            const index = replayData.findIndex((point) => point.ts === timestamp);
+            if (index < 0) return;
+            setIsReplayPlaying(false);
+            setReplayIndex(index);
+            selectTab("environment");
+          } : undefined}
+        />
+
         {IS_OPERATIONAL && !isAllZone && cycle.status === "active" && (
           <DailyProductionLog
             cycleId={cycle.id}
@@ -2748,6 +2922,7 @@ function DashboardContent() {
           inputs={currentPredictionInputs}
           onReportAnalysisChange={handleCurrentReportAnalysisChange}
           replay={IS_REPLAY_MODE}
+          onGenerateStart={IS_REPLAY_MODE ? () => setIsReplayPlaying(false) : undefined}
         />
       )}
         </>

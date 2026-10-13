@@ -1,5 +1,8 @@
 import source from "../data/zoneACompletedCyclesSource.json";
-import { SENSOR_ALERT_RULES } from "./alertRules";
+import { SENSOR_ALERT_RULES, isSensorAtOrAboveLimit } from "./alertRules";
+import { dateToDayNumber } from "./dateUtils";
+import { aggregateSensorReadings } from "./sensorTrendData";
+import type { HistoricalCycle } from "./historicalCycles";
 import type { SensorMetric } from "./types";
 
 export const RESEARCH_METRICS: SensorMetric[] = [
@@ -97,7 +100,7 @@ export type ResearchDailyRecord = {
   dailyMortality: number;
   cumulativeMortality: number;
   cumulativeMortalityPercent: number;
-  averageWeightKg: number;
+  averageWeightKg: number | null;
   adgGPerDay: number | null;
   temp: number;
   humidity: number;
@@ -116,7 +119,50 @@ export type ResearchCycle = {
   readingsPerDay: number;
   readings: ResearchReading[];
   daily: ResearchDailyRecord[];
+  mode?: "past" | "replay";
+  targetDay?: number;
 };
+
+export function createDashboardAnalysisCycle(cycle: HistoricalCycle, mode: "past" | "replay" = "past", replayDay = cycle.harvestDay): ResearchCycle {
+  const readings = cycle.data.map((point) => ({ ...point, day: dateToDayNumber(point.time, cycle.startDate) }));
+  const dailyAverages = aggregateSensorReadings(cycle.data, "daily");
+  let cumulativeMortality = 0;
+  const daily: ResearchDailyRecord[] = dailyAverages.map((point) => {
+    const day = dateToDayNumber(point.time, cycle.startDate);
+    const dailyMortality = cycle.production.mortality.filter((record) => record.day === day).reduce((total, record) => total + record.count, 0);
+    cumulativeMortality += dailyMortality;
+    const weight = cycle.production.weights.find((record) => record.day === day);
+    const previousWeight = [...cycle.production.weights].reverse().find((record) => record.day < day);
+    return {
+      day,
+      date: point.time.slice(0, 10),
+      dailyMortality,
+      cumulativeMortality,
+      cumulativeMortalityPercent: cycle.production.initialBirds ? cumulativeMortality / cycle.production.initialBirds * 100 : 0,
+      averageWeightKg: weight?.actualWeightKg ?? null,
+      adgGPerDay: weight && previousWeight ? (weight.actualWeightKg - previousWeight.actualWeightKg) * 1000 / (weight.day - previousWeight.day) : null,
+      temp: point.temp,
+      humidity: point.humidity,
+      co2: point.co2,
+      nh3: point.nh3,
+      pm25: point.pm25,
+    };
+  });
+  const intervalMinutes = cycle.dataIntervalMinutes ?? 1;
+  return {
+    id: cycle.id,
+    label: `${cycle.label} · ${mode === "past" ? "Past cycle" : `Replay · Day ${replayDay}`}`,
+    startDate: cycle.startDate,
+    endDate: mode === "replay" ? cycle.data.at(-1)?.time.slice(0, 10) ?? cycle.startDate : cycle.endDate,
+    harvestDay: mode === "replay" ? replayDay : cycle.harvestDay,
+    targetDay: cycle.harvestDay,
+    intervalMinutes,
+    readingsPerDay: 1440 / intervalMinutes,
+    readings,
+    daily,
+    mode,
+  };
+}
 
 const metricIndex: Record<SensorMetric, number> = {
   temp: 3,
@@ -230,7 +276,7 @@ export function getDailyThresholdMap(cycle: ResearchCycle) {
         (reading) => reading.day === dayIndex + 1
       );
       const exceedances = readings.filter(
-        (reading) => reading[metric] > SENSOR_ALERT_RULES[metric].threshold
+        (reading) => isSensorAtOrAboveLimit(metric, reading[metric])
       ).length;
       return {
         day: dayIndex + 1,
@@ -251,7 +297,7 @@ export function getEpisodeSummary(cycle: ResearchCycle) {
     let readingsAbove = 0;
 
     cycle.readings.forEach((reading) => {
-      if (reading[metric] > threshold) {
+      if (isSensorAtOrAboveLimit(metric, reading[metric])) {
         readingsAbove += 1;
         currentRun += 1;
         if (currentRun === 1) episodes += 1;
@@ -279,21 +325,23 @@ export function getCycleMetricSummary(cycle: ResearchCycle, metric: SensorMetric
   const average = mean(values);
   const deviation = standardDeviation(values);
   const readingsAbove = values.filter(
-    (value) => value > SENSOR_ALERT_RULES[metric].threshold
+    (value) => isSensorAtOrAboveLimit(metric, value)
   ).length;
   return {
     average,
     deviation,
     coefficientOfVariation: average ? (deviation / average) * 100 : 0,
-    minimum: Math.min(...values),
-    maximum: Math.max(...values),
+    minimum: values.length ? Math.min(...values) : 0,
+    maximum: values.length ? Math.max(...values) : 0,
     readingsAbove,
     exceedancePercent: values.length ? (readingsAbove / values.length) * 100 : 0,
   };
 }
 
 export function getDatasetCoverage(cycle: ResearchCycle) {
-  const expected = cycle.harvestDay * cycle.readingsPerDay;
+  const expected = cycle.readings.length > 0
+    ? Math.round((cycle.readings.at(-1)!.ts - cycle.readings[0].ts) / (cycle.intervalMinutes * 60 * 1000)) + 1
+    : 0;
   return {
     expected,
     received: cycle.readings.length,

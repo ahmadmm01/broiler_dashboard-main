@@ -1,5 +1,5 @@
 import { standardBroilerWeight } from "./broilerStandard";
-import { SENSOR_ALERT_RULES } from "./alertRules";
+import { SENSOR_ALERT_RULES, isSensorAtOrAboveLimit } from "./alertRules";
 import type { HarvestSummary } from "./cycleAnalytics";
 import { summarizeData } from "./sensorData";
 import type { DataPoint, ProductionCycle, Zone } from "./types";
@@ -98,7 +98,7 @@ export function assessCurrentCycleRisk({
   sensorData,
   sensorSummary,
 }: {
-  harvest: HarvestSummary;
+  harvest: Pick<HarvestSummary, "mortalityRate" | "hasWeightReference" | "weightVariancePercent" | "fcr" | "alertCount" | "sensorHealth">;
   sensorData?: DataPoint[];
   sensorSummary?: ReturnType<typeof summarizeData>;
 }): CycleRiskAssessment {
@@ -113,14 +113,14 @@ export function assessCurrentCycleRisk({
     factors.push({
       key: "mortality",
       label: "Mortality trend",
-      detail: `${harvest.mortalityRate.toFixed(2)}% mortality`,
+      detail: `${harvest.mortalityRate.toFixed(2)}% mortality (dashboard review threshold > 3.00%)`,
       score: 3,
     });
   } else if (harvest.mortalityRate > 1.5) {
     factors.push({
       key: "mortality",
       label: "Mortality trend",
-      detail: `${harvest.mortalityRate.toFixed(2)}% mortality`,
+      detail: `${harvest.mortalityRate.toFixed(2)}% mortality (dashboard review threshold > 1.50%)`,
       score: 1,
     });
   }
@@ -160,7 +160,7 @@ export function assessCurrentCycleRisk({
     });
   }
 
-  if (temperaturePeak > 32) {
+  if (isSensorAtOrAboveLimit("temp", temperaturePeak)) {
     factors.push({
       key: "temperature",
       label: "Heat exposure",
@@ -168,7 +168,7 @@ export function assessCurrentCycleRisk({
       score: 1,
     });
   }
-  if (co2Peak > 1200) {
+  if (isSensorAtOrAboveLimit("co2", co2Peak)) {
     factors.push({
       key: "co2",
       label: "CO₂ peak",
@@ -176,7 +176,7 @@ export function assessCurrentCycleRisk({
       score: 1,
     });
   }
-  if (nh3Peak >= SENSOR_ALERT_RULES.nh3.threshold) {
+  if (isSensorAtOrAboveLimit("nh3", nh3Peak)) {
     factors.push({
       key: "nh3",
       label: "NH₃ peak",
@@ -184,7 +184,7 @@ export function assessCurrentCycleRisk({
       score: 1,
     });
   }
-  if (pm25Peak > 35) {
+  if (isSensorAtOrAboveLimit("pm25", pm25Peak)) {
     factors.push({
       key: "pm25",
       label: "PM2.5 peak",
@@ -309,7 +309,7 @@ export function createCurrentCyclePrediction({
     alertCount: harvest.alertCount,
     riskLevel,
     riskScore: riskAssessment.score,
-    riskDrivers: riskAssessment.factors.map((factor) => factor.detail),
+    riskDrivers: riskAssessment.factors.map((factor) => `${factor.label}: ${factor.detail}`),
     confidence,
     sensorCompleteness: round(harvest.sensorHealth.completeness, 1),
     latestReading: sensorData.at(-1)?.time ?? "-",
@@ -330,10 +330,10 @@ export function createCurrentCyclePrediction({
   const priorityActions: CyclePredictionAdvice["priorityActions"] = [];
   const monitoringFocus = new Set<string>();
 
-  if (temperaturePeak > 32) {
+  if (isSensorAtOrAboveLimit("temp", temperaturePeak)) {
     keyRisks.push({
       title: "Heat stress exposure",
-      evidence: `Temperature peaked at ${temperaturePeak.toFixed(2)} °C against the 32 °C dashboard threshold.`,
+      evidence: `Temperature peaked at ${temperaturePeak.toFixed(2)} °C against the ${SENSOR_ALERT_RULES.temp.threshold} °C dashboard threshold.`,
       impact: "Sustained heat can reduce feed intake and late-cycle weight gain.",
     });
     priorityActions.push({
@@ -345,8 +345,8 @@ export function createCurrentCyclePrediction({
   }
 
   if (
-    co2Peak > 1200 ||
-    nh3Peak >= SENSOR_ALERT_RULES.nh3.threshold
+    isSensorAtOrAboveLimit("co2", co2Peak) ||
+    isSensorAtOrAboveLimit("nh3", nh3Peak)
   ) {
     keyRisks.push({
       title: "Ventilation or litter air-quality risk",
@@ -361,10 +361,10 @@ export function createCurrentCyclePrediction({
     monitoringFocus.add("CO₂ and NH₃ after ventilation adjustments");
   }
 
-  if (pm25Peak > 35) {
+  if (isSensorAtOrAboveLimit("pm25", pm25Peak)) {
     keyRisks.push({
       title: "Dust exposure",
-      evidence: `PM2.5 peaked at ${pm25Peak.toFixed(2)} µg/m³ against the 35 µg/m³ dashboard threshold.`,
+      evidence: `PM2.5 peaked at ${pm25Peak.toFixed(2)} µg/m³ against the ${SENSOR_ALERT_RULES.pm25.threshold} µg/m³ dashboard threshold.`,
       impact: "Dust can indicate dry litter or activity-related air-quality pressure.",
     });
     priorityActions.push({
@@ -423,7 +423,7 @@ export function createCurrentCyclePrediction({
   if (harvest.alertCount >= 3) {
     keyRisks.push({
       title: "Repeated environmental alert exposure",
-      evidence: `${harvest.alertCount} alert events were recorded during the current cycle.`,
+      evidence: `${harvest.alertCount} sensor threshold episodes were recorded during the current cycle.`,
       impact: "Repeated short events can still affect comfort and performance even when cycle averages look acceptable.",
     });
     priorityActions.push({

@@ -105,12 +105,14 @@ export default function CurrentCyclePrediction({
   inputs,
   onReportAnalysisChange,
   replay = false,
+  onGenerateStart,
 }: {
   inputs: CurrentCyclePredictionInput[];
   onReportAnalysisChange?: (
     snapshot: CurrentCycleReportAnalysisSnapshot
   ) => void;
   replay?: boolean;
+  onGenerateStart?: () => void;
 }) {
   const predictions = useMemo(
     () =>
@@ -197,10 +199,10 @@ export default function CurrentCyclePrediction({
   const aiResult = aiResults[contextSignature];
   const isGenerating = generatingContext === contextSignature;
   const aiUnavailable = Boolean(unavailableContexts[contextSignature]);
-  const hasCurrentAiResult = Boolean(aiResult);
+  const hasCurrentAiResult = Boolean(aiResult && aiResult.baselineSignature === baselineSignature);
   const hasRequestedAi = Boolean(requestedContexts[contextSignature]);
   const hasNewSensorData = Boolean(
-    hasCurrentAiResult && aiResult?.baselineSignature !== baselineSignature
+    aiResult && aiResult.baselineSignature !== baselineSignature
   );
   const showRecommendations =
     hasCurrentAiResult || (hasRequestedAi && aiUnavailable);
@@ -220,11 +222,11 @@ export default function CurrentCyclePrediction({
         : hasRequestedAi && aiUnavailable
           ? "fallback"
           : "local",
-      generatedAt: aiResult?.generatedAt,
+      generatedAt: hasCurrentAiResult ? aiResult?.generatedAt : undefined,
       dataThrough: recommendationsDataThrough,
-      model: aiResult?.model,
+      model: hasCurrentAiResult ? aiResult?.model : undefined,
       riskLevel: overallRisk,
-      stale: hasNewSensorData,
+      stale: false,
       advice,
     }),
     [
@@ -234,7 +236,6 @@ export default function CurrentCyclePrediction({
       aiUnavailable,
       contextSignature,
       hasCurrentAiResult,
-      hasNewSensorData,
       hasRequestedAi,
       overallRisk,
       predictions,
@@ -247,6 +248,7 @@ export default function CurrentCyclePrediction({
   }, [onReportAnalysisChange, reportAnalysis]);
 
   const generateAiRecommendations = useCallback(async () => {
+    onGenerateStart?.();
     setRequestedContexts((current) => ({
       ...current,
       [contextSignature]: true,
@@ -292,7 +294,7 @@ export default function CurrentCyclePrediction({
         current === contextSignature ? null : current
       );
     }
-  }, [baselineSignature, baselines, contextSignature, isMultiZone, latestReading]);
+  }, [baselineSignature, baselines, contextSignature, isMultiZone, latestReading, onGenerateStart]);
 
   useEffect(() => {
     if (
@@ -744,7 +746,7 @@ export default function CurrentCyclePrediction({
         ) : (
           <div className="rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 px-5 py-6 text-center">
             <h3 className="font-semibold text-slate-900">
-              AI recommendations have not been generated
+              {hasNewSensorData ? "Generate recommendations for the selected record" : "AI recommendations have not been generated"}
             </h3>
             <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-slate-600">
               {isMultiZone

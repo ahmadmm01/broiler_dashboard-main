@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import { SENSOR_ALERT_RULES } from "../lib/alertRules";
 import { dateToDayNumber } from "../lib/dateUtils";
+import { aggregateSensorReadings, sampleSensorTrend, summarizeSensorMetric } from "../lib/sensorTrendData";
 import SensorTrendCard from "./SensorTrendCard";
 import type {
   DataPoint,
@@ -22,11 +23,7 @@ import type {
   Zone,
 } from "../lib/types";
 
-type AggregationMode = "live" | "hourly" | "daily";
-
-type TrendPoint = DataPoint & {
-  label: string;
-};
+type AggregationMode = "live" | "raw" | "hourly" | "daily";
 
 type MultiZoneTrendPoint = {
   label: string;
@@ -63,94 +60,8 @@ const zoneColors: Record<Zone, string> = {
   C: "#16a34a",
 };
 
-const round = (value: number, digits = 2) =>
-  Number(value.toFixed(digits));
-
 const LIVE_WINDOW_HOURS = 6;
 const LIVE_WINDOW_MS = LIVE_WINDOW_HOURS * 60 * 60 * 1000;
-
-function aggregateReadings(
-  data: DataPoint[],
-  mode: "hourly" | "daily"
-): TrendPoint[] {
-  const groups = new Map<
-    number,
-    {
-      count: number;
-      ts: number;
-      temp: number;
-      humidity: number;
-      co2: number;
-      nh3: number;
-      pm25: number;
-    }
-  >();
-
-  data.forEach((point) => {
-    const pointDate = new Date(point.ts);
-    const periodStart =
-      mode === "hourly"
-        ? new Date(
-            pointDate.getFullYear(),
-            pointDate.getMonth(),
-            pointDate.getDate(),
-            pointDate.getHours()
-          )
-        : new Date(
-            pointDate.getFullYear(),
-            pointDate.getMonth(),
-            pointDate.getDate()
-          );
-    const key = periodStart.getTime();
-    const current = groups.get(key) ?? {
-      count: 0,
-      ts: key,
-      temp: 0,
-      humidity: 0,
-      co2: 0,
-      nh3: 0,
-      pm25: 0,
-    };
-    current.count += 1;
-    current.ts = Math.max(current.ts, point.ts);
-    metricOrder.forEach((metric) => {
-      current[metric] += point[metric];
-    });
-    groups.set(key, current);
-  });
-
-  return Array.from(groups.entries())
-    .sort(([left], [right]) => left - right)
-    .map(([periodStart, values]) => {
-      const date = new Date(periodStart);
-      const dateLabel = `${String(date.getMonth() + 1).padStart(2, "0")}/${String(
-        date.getDate()
-      ).padStart(2, "0")}`;
-      const hourLabel = `${String(date.getHours()).padStart(2, "0")}:00`;
-
-      return {
-        time:
-          mode === "hourly"
-            ? `${date.toISOString().slice(0, 10)} ${hourLabel}`
-            : date.toISOString().slice(0, 10),
-        dayLabel: dateLabel,
-        label: mode === "hourly" ? `${dateLabel} ${hourLabel}` : dateLabel,
-        ts: values.ts,
-        temp: round(values.temp / values.count),
-        humidity: round(values.humidity / values.count),
-        co2: Math.round(values.co2 / values.count),
-        nh3: round(values.nh3 / values.count),
-        pm25: round(values.pm25 / values.count),
-      };
-    });
-}
-
-function formatLive(data: DataPoint[]): TrendPoint[] {
-  return data.map((point) => ({
-    ...point,
-    label: point.time.slice(11, 16),
-  }));
-}
 
 export default function CurrentCycleSensorTrends({
   series,
@@ -163,6 +74,7 @@ export default function CurrentCycleSensorTrends({
 }) {
   const [aggregation, setAggregation] =
     useState<AggregationMode>("hourly");
+  const isAveraged = aggregation === "hourly" || aggregation === "daily";
   const preparedSeries = useMemo(
     () =>
       series.map(({ zone, cycle, data }) => {
@@ -173,25 +85,15 @@ export default function CurrentCycleSensorTrends({
         const summaryData = aggregation === "live" ? liveWindowData : data;
         const chartPoints =
           aggregation === "live"
-            ? formatLive(liveWindowData)
-            : aggregateReadings(data, aggregation);
+            ? aggregateSensorReadings(liveWindowData, "raw")
+            : aggregation === "raw"
+              ? sampleSensorTrend(aggregateSensorReadings(data, "raw"))
+            : aggregateSensorReadings(data, aggregation);
         const summaries = Object.fromEntries(
           metricOrder.map((metric) => {
-            const values = summaryData.map((point) => point[metric]);
-            const rule = SENSOR_ALERT_RULES[metric];
             return [
               metric,
-              {
-                average: values.length
-                  ? values.reduce((total, value) => total + value, 0) /
-                    values.length
-                  : 0,
-                minimum: values.length ? Math.min(...values) : 0,
-                maximum: values.length ? Math.max(...values) : 0,
-                latest: values.at(-1) ?? 0,
-                exceedances: values.filter((value) => value >= rule.threshold)
-                  .length,
-              },
+              summarizeSensorMetric(summaryData, chartPoints, metric),
             ];
           })
         ) as Record<
@@ -202,6 +104,8 @@ export default function CurrentCycleSensorTrends({
             maximum: number;
             latest: number;
             exceedances: number;
+            episodeCount: number;
+            plottedExceedances: number;
           }
         >;
 
@@ -221,6 +125,7 @@ export default function CurrentCycleSensorTrends({
         };
         metricOrder.forEach((metric) => {
           combined[`${metric}${zone}`] = point[metric];
+          combined[`${metric}Peak${zone}`] = point.peaks[metric];
         });
         pointsByTimestamp.set(point.ts, combined);
       });
@@ -295,7 +200,7 @@ export default function CurrentCycleSensorTrends({
                     className="rounded-full border border-cyan-100 bg-white px-2.5 py-1 text-cyan-800"
                   >
                     {replay
-                      ? `Zone ${zone} · Monitoring data`
+                      ? `Zone ${zone} · ${zoneCycle.id} · Day ${cycleDay}`
                       : disconnected
                       ? `Zone ${zone} · Sensor disconnected`
                       : zoneCycle.status === "draft"
@@ -311,7 +216,9 @@ export default function CurrentCycleSensorTrends({
               <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-slate-600">
                 {chartData.length}{" "}
                 {aggregation === "live"
-                  ? "live points"
+                  ? "recent raw points"
+                  : aggregation === "raw"
+                    ? "raw points"
                   : aggregation === "hourly"
                     ? "hourly points"
                     : "daily points"}
@@ -334,7 +241,7 @@ export default function CurrentCycleSensorTrends({
             </div>
           </div>
           <div
-            className="inline-flex w-fit rounded-xl border border-slate-200 bg-white p-1"
+            className="inline-flex max-w-full flex-wrap rounded-xl border border-slate-200 bg-white p-1"
             aria-label="Current cycle sensor trend aggregation"
           >
             {(
@@ -347,6 +254,7 @@ export default function CurrentCycleSensorTrends({
                       ? "Last Recorded · 6 Hours"
                       : "Live · Last 6 Hours",
                 ],
+                ["raw", "Raw Readings"],
                 ["hourly", "Hourly Average"],
                 ["daily", "Daily Average"],
               ] as const
@@ -374,6 +282,11 @@ export default function CurrentCycleSensorTrends({
           Sensor Disconnected · Displaying last recorded environmental data
         </div>
       )}
+      {totalReadings > 0 && isAveraged && (
+        <p className="border-b border-slate-100 px-5 py-3 text-xs leading-5 text-slate-600">
+          Solid line: {aggregation === "hourly" ? "hourly" : "daily"} average. Dashed line: recorded peak in the same period. Limit counts use raw readings, so a brief crossing can occur while the average stays below the limit.
+        </p>
+      )}
       {totalReadings === 0 ? (
         <div className="p-8 text-center">
           <h3 className="font-semibold text-slate-800">
@@ -395,6 +308,7 @@ export default function CurrentCycleSensorTrends({
                 unit={rule.unit}
                 valueDigits={metric === "co2" ? 0 : 2}
                 emphasized={index === metricOrder.length - 1}
+                plottedLabel={!isAveraged ? "Raw points" : aggregation === "hourly" ? "Hourly averages" : "Daily averages"}
                 summaries={preparedSeries.map(({ zone, summaries }) => ({
                   id: zone,
                   label: `Zone ${zone}`,
@@ -436,13 +350,13 @@ export default function CurrentCycleSensorTrends({
                           fontSize: 10,
                         }}
                       />
-                      {preparedSeries.length > 1 && <Legend />}
+                      {(preparedSeries.length > 1 || isAveraged) && <Legend />}
                       {preparedSeries.map(({ zone }) => (
                         <Line
                           key={zone}
                           type="monotone"
                           dataKey={`${metric}${zone}`}
-                          name={`Zone ${zone}`}
+                          name={`Zone ${zone} · ${!isAveraged ? "Reading" : aggregation === "hourly" ? "Hourly average" : "Daily average"}`}
                           stroke={
                             preparedSeries.length > 1
                               ? zoneColors[zone]
@@ -454,6 +368,11 @@ export default function CurrentCycleSensorTrends({
                           connectNulls
                           isAnimationActive={false}
                         />
+                      ))}
+                      {isAveraged && preparedSeries.map(({ zone }) => (
+                        <Line key={`peak-${zone}`} type="linear" dataKey={`${metric}Peak${zone}`} name={`Zone ${zone} · Recorded peak`}
+                          stroke={preparedSeries.length > 1 ? zoneColors[zone] : "#ea580c"} strokeDasharray="4 4" strokeWidth={1.5}
+                          dot={false} activeDot={{ r: 3 }} connectNulls isAnimationActive={false} />
                       ))}
                     </LineChart>
                   </ResponsiveContainer>

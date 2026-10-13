@@ -142,7 +142,7 @@ export default function HistoricalCycleAiAnalysis({
             <span
               className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${riskStyle[analysis.baseline.riskLevel]}`}
             >
-              {analysis.baseline.riskLevel} retrospective risk
+              {analysis.baseline.riskLevel} cycle review risk
             </span>
           </div>
           <p className="mt-1 text-sm text-slate-600">
@@ -253,8 +253,8 @@ export default function HistoricalCycleAiAnalysis({
 
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
               <span>
-                {analysis.baseline.readingsWithIssue} of {analysis.baseline.records}{" "}
-                readings were outside at least one review limit.
+                {analysis.baseline.sensorAlertEpisodes} sensor alert episodes · {analysis.baseline.readingsWithIssue} of {analysis.baseline.records}{" "}
+                raw readings were at or above at least one review limit.
               </span>
               <span className="font-medium text-slate-800">
                 {analysis.baseline.completeness.toFixed(1)}% expected sensor coverage
@@ -267,6 +267,12 @@ export default function HistoricalCycleAiAnalysis({
             summary. This analysis is limited to the available production KPIs.
           </div>
         )}
+
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+          <div className="font-semibold text-slate-900">Why this cycle risk?</div>
+          <p className="mt-1">{analysis.baseline.riskDrivers.length > 0 ? analysis.baseline.riskDrivers.join(" · ") : "No configured production or sensor review driver was detected."}</p>
+          <p className="mt-1 text-xs text-slate-500">The same review rules apply to replay and completed cycles. Risk includes production outcomes and sensor history; the sensor graphs show the environmental part.</p>
+        </div>
 
         {isGenerating ? (
           <div className="rounded-xl border border-violet-100 bg-violet-50 p-5 text-sm text-violet-700">
